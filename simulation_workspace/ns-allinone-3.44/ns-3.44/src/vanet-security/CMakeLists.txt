@@ -3,7 +3,7 @@ find_package(OpenSSL REQUIRED)
 option(VANET_SECURITY_ENABLE_PBC "Enable PBC (Pairing-Based Cryptography) support" OFF)
 
 if(VANET_SECURITY_ENABLE_PBC)
-  find_path(PBC_INCLUDE_DIR pbc.h)
+  find_path(PBC_INCLUDE_DIR NAMES pbc/pbc.h pbc.h)
   find_library(PBC_LIBRARY pbc)
   if(NOT PBC_INCLUDE_DIR OR NOT PBC_LIBRARY)
     message(FATAL_ERROR "PBC requested but not found. Install libpbc-dev or set PBC_INCLUDE_DIR/PBC_LIBRARY.")

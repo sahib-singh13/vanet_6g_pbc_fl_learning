@@ -4,16 +4,28 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NS3_DIR="$REPO_ROOT/simulation_workspace/ns-allinone-3.44/ns-3.44"
 
-RESULT_DIR="${RESULT_DIR:-results/nr_max_150_pbc_fl}"
+TARGET_VEHICLES="${TARGET_VEHICLES:-100}"
+RESULT_DIR="${RESULT_DIR:-results/nr_max_150_pbc_fl_${TARGET_VEHICLES}v}"
 SIM_TIME="${SIM_TIME:-150}"
 FL_ROUNDS="${FL_ROUNDS:-20}"
-FL_PARTICIPANTS="${FL_PARTICIPANTS:-50}"
+FL_PARTICIPANTS="${FL_PARTICIPANTS:-$TARGET_VEHICLES}"
 FL_MODEL_DIM="${FL_MODEL_DIM:-64}"
 FL_ROUND_INTERVAL="${FL_ROUND_INTERVAL:-1.0}"
-TRACE_PATH="${TRACE_PATH:-mobility_trace.tcl}"
+BASE_TRACE_PATH="${BASE_TRACE_PATH:-mobility_trace.tcl}"
+TRACE_PATH="${TRACE_PATH:-mobility_trace_${TARGET_VEHICLES}.tcl}"
 NS3_CONFIGURE_ARGS="${NS3_CONFIGURE_ARGS:---enable-examples --build-profile=optimized}"
+PBC_CMAKE_ARG="-DVANET_SECURITY_ENABLE_PBC=ON"
+PBC_CMAKE_EXTRA_ARGS="${PBC_CMAKE_EXTRA_ARGS:-}"
+
+if [[ -z "$PBC_CMAKE_EXTRA_ARGS" && -f /usr/local/lib/libpbc.so && -d /usr/local/include ]]; then
+  PBC_CMAKE_EXTRA_ARGS="-DPBC_INCLUDE_DIR=/usr/local/include -DPBC_LIBRARY=/usr/local/lib/libpbc.so"
+fi
 
 export LSAN_OPTIONS="${LSAN_OPTIONS:-detect_leaks=0}"
+
+configure_with_pbc() {
+  ./ns3 configure "$@" $NS3_CONFIGURE_ARGS -- "$PBC_CMAKE_ARG" $PBC_CMAKE_EXTRA_ARGS
+}
 
 run_case() {
   local case_name="$1"
@@ -34,8 +46,10 @@ run_case() {
 write_index() {
   local index="$RESULT_DIR/nr_max_150_pbc_fl_index.md"
   {
-    printf '# NR-Max 150 Second PBC And PBC+FL Report Index\n\n'
+    printf '# NR-Max %s Second %s Vehicle PBC And PBC+FL Report Index\n\n' "$SIM_TIME" "$TARGET_VEHICLES"
     printf 'Simulation time: `%s` seconds\n\n' "$SIM_TIME"
+    printf 'Target vehicles: `%s`\n\n' "$TARGET_VEHICLES"
+    printf 'Base trace: `%s`\n\n' "$BASE_TRACE_PATH"
     printf 'Trace: `%s`\n\n' "$TRACE_PATH"
     printf 'Trace vehicle count: `%s`\n\n' "$vehicle_count"
     printf 'Radio profile: `6g_nr_max`\n\n'
@@ -74,22 +88,33 @@ cd "$NS3_DIR"
 mkdir -p "$RESULT_DIR"
 
 if [[ ! -f "$TRACE_PATH" ]]; then
-  echo "Trace file not found from ns-3 directory: $TRACE_PATH" >&2
-  exit 1
+  if [[ "$TRACE_PATH" == "mobility_trace_${TARGET_VEHICLES}.tcl" && -f "$BASE_TRACE_PATH" ]]; then
+    echo "Generating ${TARGET_VEHICLES}-vehicle trace from ${BASE_TRACE_PATH}..."
+    python3 "$REPO_ROOT/scripts/generate_ns2_vehicle_trace.py" \
+      --input "$BASE_TRACE_PATH" \
+      --output "$TRACE_PATH" \
+      --target-vehicles "$TARGET_VEHICLES"
+  else
+    echo "Trace file not found from ns-3 directory: $TRACE_PATH" >&2
+    exit 1
+  fi
 fi
 
 vehicle_count="$(grep -Eo 'node_\([0-9]+\)' "$TRACE_PATH" | sort -u | wc -l | tr -d '[:space:]')"
 echo "Trace vehicle count: ${vehicle_count}"
-if [[ "$vehicle_count" != "50" ]]; then
-  echo "Warning: expected 50 vehicles, but trace reports ${vehicle_count}." >&2
+if [[ "$vehicle_count" != "$TARGET_VEHICLES" ]]; then
+  echo "Warning: TARGET_VEHICLES=${TARGET_VEHICLES}, but trace reports ${vehicle_count} vehicles." >&2
 fi
 if ((FL_PARTICIPANTS > vehicle_count)); then
   echo "Warning: FL_PARTICIPANTS=${FL_PARTICIPANTS}, but trace has ${vehicle_count} vehicles. Simulator will cap selected vehicles to the trace count." >&2
 fi
 
 if [[ ! -f cmake-cache/CMakeCache.txt ]]; then
-  echo "Configuring ns-3 because this checkout has no cmake-cache/CMakeCache.txt..."
-  ./ns3 configure $NS3_CONFIGURE_ARGS
+  echo "Configuring ns-3 with PBC enabled because this checkout has no cmake-cache/CMakeCache.txt..."
+  configure_with_pbc
+elif ! grep -q '^VANET_SECURITY_ENABLE_PBC:BOOL=ON$' cmake-cache/CMakeCache.txt; then
+  echo "Reconfiguring ns-3 because VANET_SECURITY_ENABLE_PBC is not enabled in cmake-cache..."
+  configure_with_pbc --force-refresh
 fi
 
 echo "Building VANET NR security scenario..."
