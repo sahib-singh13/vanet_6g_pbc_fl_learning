@@ -79,6 +79,11 @@ if [[ "$vehicle_count" != "50" ]]; then
   echo "Warning: expected 50 vehicles, but trace reports ${vehicle_count}." >&2
 fi
 
+if [[ ! -f cmake-cache/CMakeCache.txt ]]; then
+  echo "Configuring ns-3 because this checkout has no cmake-cache/CMakeCache.txt..."
+  ./ns3 configure --enable-examples
+fi
+
 echo "Building VANET NR security scenario..."
 ./ns3 build vanet-security-nr
 
