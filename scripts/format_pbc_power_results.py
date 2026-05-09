@@ -202,6 +202,7 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
     totals = {str(row["stage"]): row for row in rows if row["section"] == "total"}
     security_rows = [row for row in rows if row["section"] in {"security_setup", "security_message"}]
     communication_rows = [row for row in rows if row["section"] in {"communication_tx", "communication_rx"}]
+    detailed_rows = [row for row in rows if row["section"] != "total"]
 
     lines = [
         f"# VANET Security Power And Latency Report: {network} / {mode}",
@@ -213,8 +214,60 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                 ["Total energy (J)", fmt(totals["overall_total"]["total_energy_j"], 6)],
                 ["Security energy (J)", fmt(totals["security_total"]["total_energy_j"], 6)],
                 ["Communication energy (J)", fmt(totals["communication_total"]["total_energy_j"], 6)],
+                ["Total stage latency (ms)", fmt(totals["overall_total"]["total_latency_ms"], 3)],
                 ["Security latency total (ms)", fmt(totals["security_total"]["total_latency_ms"], 3)],
                 ["Communication latency total (ms)", fmt(totals["communication_total"]["total_latency_ms"], 3)],
+            ],
+        ),
+        "",
+        "## Energy And Latency Distribution",
+        md_table(
+            [
+                "Category",
+                "Energy (J)",
+                "Energy %",
+                "Total Latency (ms)",
+                "Latency %",
+                "Avg Latency (ms)",
+                "Count",
+            ],
+            [
+                [
+                    "Security",
+                    fmt(totals["security_total"]["total_energy_j"], 6),
+                    fmt(totals["security_total"]["energy_percent"], 2),
+                    fmt(totals["security_total"]["total_latency_ms"], 3),
+                    fmt(totals["security_total"]["latency_percent"], 2),
+                    fmt(totals["security_total"]["avg_latency_ms"], 6),
+                    str(totals["security_total"]["count"]),
+                ],
+                [
+                    "Communication",
+                    fmt(totals["communication_total"]["total_energy_j"], 6),
+                    fmt(totals["communication_total"]["energy_percent"], 2),
+                    fmt(totals["communication_total"]["total_latency_ms"], 3),
+                    fmt(totals["communication_total"]["latency_percent"], 2),
+                    fmt(totals["communication_total"]["avg_latency_ms"], 6),
+                    str(totals["communication_total"]["count"]),
+                ],
+                [
+                    "Communication TX",
+                    fmt(totals["communication_tx_total"]["total_energy_j"], 6),
+                    fmt(totals["communication_tx_total"]["energy_percent"], 2),
+                    fmt(totals["communication_tx_total"]["total_latency_ms"], 3),
+                    fmt(totals["communication_tx_total"]["latency_percent"], 2),
+                    fmt(totals["communication_tx_total"]["avg_latency_ms"], 6),
+                    str(totals["communication_tx_total"]["count"]),
+                ],
+                [
+                    "Communication RX",
+                    fmt(totals["communication_rx_total"]["total_energy_j"], 6),
+                    fmt(totals["communication_rx_total"]["energy_percent"], 2),
+                    fmt(totals["communication_rx_total"]["total_latency_ms"], 3),
+                    fmt(totals["communication_rx_total"]["latency_percent"], 2),
+                    fmt(totals["communication_rx_total"]["avg_latency_ms"], 6),
+                    str(totals["communication_rx_total"]["count"]),
+                ],
             ],
         ),
         "",
@@ -229,10 +282,21 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                     [
                         ["Simulation time (s)", power_row.get("time", "")],
                         ["Infected ratio", power_row.get("infected_ratio", "")],
+                        ["Propagation distance", power_row.get("propagation_distance", "")],
                         ["Verification failures", power_row.get("verification_failures", "")],
+                        ["Security energy (J)", power_row.get("security_energy_j", "")],
+                        ["Communication energy (J)", power_row.get("comm_energy_j", "")],
+                        ["Total energy (J)", power_row.get("total_energy_j", "")],
                         ["Avg total power (W)", power_row.get("avg_total_power_w", "")],
                         ["Avg security power (W)", power_row.get("avg_security_power_w", "")],
                         ["Avg communication power (W)", power_row.get("avg_comm_power_w", "")],
+                        ["Avg V2V delay (ms)", power_row.get("avg_v2v_delay_ms", "")],
+                        ["Avg V2I uplink delay (ms)", power_row.get("avg_v2i_uplink_ms", "")],
+                        ["Avg V2I downlink delay (ms)", power_row.get("avg_v2i_downlink_ms", "")],
+                        ["Avg V2I RTT delay (ms)", power_row.get("avg_v2i_rtt_ms", "")],
+                        ["Avg registration delay (ms)", power_row.get("avg_reg_delay_ms", "")],
+                        ["Avg KGC RTT (ms)", power_row.get("avg_kgc_rtt_ms", "")],
+                        ["Avg TA RTT (ms)", power_row.get("avg_ta_rtt_ms", "")],
                         ["Avg sign latency (ms)", power_row.get("avg_sign_ms", "")],
                         ["Avg aggregate latency (ms)", power_row.get("avg_aggregate_ms", "")],
                         ["Avg verify latency (ms)", power_row.get("avg_verify_ms", "")],
@@ -247,7 +311,18 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
         [
             "## Security Stages",
             md_table(
-                ["Section", "Stage", "Role", "Count", "Avg Latency (ms)", "Energy (J)", "Energy %"],
+                [
+                    "Section",
+                    "Stage",
+                    "Role",
+                    "Count",
+                    "Avg Latency (ms)",
+                    "Total Latency (ms)",
+                    "Latency %",
+                    "Energy (J)",
+                    "Avg Energy (mJ/op)",
+                    "Energy %",
+                ],
                 [
                     [
                         str(row["section"]),
@@ -255,7 +330,10 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                         str(row["role"]),
                         str(row["count"]),
                         fmt(row["avg_latency_ms"], 3),
+                        fmt(row["total_latency_ms"], 3),
+                        fmt(row["latency_percent"], 2),
                         fmt(row["total_energy_j"], 6),
+                        fmt(row["avg_energy_mj_per_op"], 6),
                         fmt(row["energy_percent"], 2),
                     ]
                     for row in security_rows
@@ -264,14 +342,27 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
             "",
             "## Communication Stages",
             md_table(
-                ["Direction", "Role/Category", "Count", "Avg Airtime (ms)", "Energy (J)", "Energy %"],
+                [
+                    "Direction",
+                    "Role/Category",
+                    "Count",
+                    "Avg Airtime (ms)",
+                    "Total Airtime (ms)",
+                    "Latency %",
+                    "Energy (J)",
+                    "Avg Energy (mJ/op)",
+                    "Energy %",
+                ],
                 [
                     [
                         str(row["stage"]).replace("communication_", ""),
                         str(row["role"]),
                         str(row["count"]),
                         fmt(row["avg_latency_ms"], 6),
+                        fmt(row["total_latency_ms"], 3),
+                        fmt(row["latency_percent"], 2),
                         fmt(row["total_energy_j"], 6),
+                        fmt(row["avg_energy_mj_per_op"], 6),
                         fmt(row["energy_percent"], 2),
                     ]
                     for row in communication_rows
@@ -283,23 +374,55 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
     )
 
     top_rows = sorted(
-        [row for row in rows if row["section"] != "total"],
+        detailed_rows,
         key=lambda row: float(row["total_energy_j"]),
         reverse=True,
     )[:10]
     lines.append(
         md_table(
-            ["Rank", "Stage", "Role", "Energy (J)", "Avg Latency (ms)", "Count"],
+            ["Rank", "Stage", "Role", "Energy (J)", "Energy %", "Avg Latency (ms)", "Count"],
             [
                 [
                     str(index),
                     str(row["stage"]),
                     str(row["role"]),
                     fmt(row["total_energy_j"], 6),
+                    fmt(row["energy_percent"], 2),
                     fmt(row["avg_latency_ms"], 3),
                     str(row["count"]),
                 ]
                 for index, row in enumerate(top_rows, start=1)
+            ],
+        )
+    )
+    lines.extend(["", "## Top Latency Consumers"])
+    top_latency_rows = sorted(
+        detailed_rows,
+        key=lambda row: float(row["total_latency_ms"]),
+        reverse=True,
+    )[:10]
+    lines.append(
+        md_table(
+            [
+                "Rank",
+                "Stage",
+                "Role",
+                "Total Latency (ms)",
+                "Latency %",
+                "Avg Latency (ms)",
+                "Count",
+            ],
+            [
+                [
+                    str(index),
+                    str(row["stage"]),
+                    str(row["role"]),
+                    fmt(row["total_latency_ms"], 3),
+                    fmt(row["latency_percent"], 2),
+                    fmt(row["avg_latency_ms"], 6),
+                    str(row["count"]),
+                ]
+                for index, row in enumerate(top_latency_rows, start=1)
             ],
         )
     )

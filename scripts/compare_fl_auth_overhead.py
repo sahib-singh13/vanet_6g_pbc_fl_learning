@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 POWER_METRICS = [
+    ("security_energy_j", "Security energy (J)"),
+    ("avg_security_power_w", "Average security power (W)"),
     ("comm_energy_j", "Communication energy (J)"),
     ("avg_comm_power_w", "Average communication power (W)"),
     ("total_energy_j", "Total energy (J)"),
@@ -18,8 +20,12 @@ POWER_METRICS = [
     ("avg_v2i_downlink_ms", "Average V2I downlink delay (ms)"),
     ("avg_v2i_rtt_ms", "Average V2I RTT (ms)"),
     ("avg_reg_delay_ms", "Average registration delay (ms)"),
+    ("avg_kgc_rtt_ms", "Average KGC RTT (ms)"),
+    ("avg_ta_rtt_ms", "Average TA RTT (ms)"),
     ("avg_sign_ms", "Average signing latency (ms)"),
+    ("avg_aggregate_ms", "Average aggregation latency (ms)"),
     ("avg_verify_ms", "Average verification latency (ms)"),
+    ("avg_partial_key_ms", "Average partial-key latency (ms)"),
 ]
 
 
@@ -63,8 +69,16 @@ def fl_compute(row: dict[str, str]) -> bool:
     return row.get("stage", "").startswith("fl_")
 
 
+def security_compute(row: dict[str, str]) -> bool:
+    return not any_comm(row) and not fl_compute(row)
+
+
 def pbc_compute(row: dict[str, str]) -> bool:
     return row.get("stage", "").startswith("pbc_")
+
+
+def ecc_compute(row: dict[str, str]) -> bool:
+    return row.get("stage", "").startswith("ecc_") or row.get("stage", "") == "cert_sign"
 
 
 def delta(fl_value: float, auth_value: float) -> tuple[float, str]:
@@ -123,16 +137,16 @@ def write_markdown(path: Path, label: str, rows: list[dict[str, str]], fl_round_
     lines = [
         f"# FL + Authentication Overhead Analysis: {label}",
         "",
-        "This report compares a PBC authentication-only VANET run against a PBC authentication plus federated learning run.",
+        "This report compares an authentication-only VANET run against the same authentication mode plus federated learning.",
         "",
         "Formula:",
         "",
         "```text",
-        "overhead_abs = auth_fl_value - auth_only_value",
-        "overhead_percent = 100 * (auth_fl_value - auth_only_value) / auth_only_value",
+        "overhead_abs = with_fl_value - baseline_value",
+        "overhead_percent = 100 * (with_fl_value - baseline_value) / baseline_value",
         "```",
         "",
-        "Positive overhead means FL + authentication is higher than authentication only.",
+        "Positive overhead means authentication + FL is higher than authentication only.",
         "",
         "## FL Completion",
         "",
@@ -158,7 +172,7 @@ def write_markdown(path: Path, label: str, rows: list[dict[str, str]], fl_round_
         [
             "## Communication And Delay Overhead",
             md_table(
-                ["Metric", "Auth only", "Auth + FL", "Overhead", "Overhead %"],
+                ["Metric", "Baseline", "With FL", "Overhead", "Overhead %"],
                 [
                     [
                         row["metric"],
@@ -175,7 +189,7 @@ def write_markdown(path: Path, label: str, rows: list[dict[str, str]], fl_round_
             "",
             "The stage rows named `communication_*` represent analytical airtime and radio energy. Rows whose role contains `fl_` are FL-specific communication overhead.",
             "",
-            "The rows named `fl_local_train`, `fl_mask_generate`, `fl_edge_aggregate`, and `fl_global_aggregate` represent the added FL computation delay. In the current ns-3 implementation, local training is synthetic and lightweight; real ML accuracy and training behavior remain in the Python baseline.",
+            "The rows named `fl_local_train`, `fl_mask_generate`, `fl_edge_aggregate`, and `fl_global_aggregate` represent added FL computation delay. In the current ns-3 implementation, local training is synthetic and lightweight; real ML accuracy and training behavior remain in the Python baseline.",
             "",
         ]
     )
@@ -204,12 +218,16 @@ def main() -> None:
         add_comparison(rows, args.label, name, to_float(auth_power.get(key)), to_float(fl_power.get(key)))
 
     stage_metrics = [
+        ("Total security-stage energy (J)", stage_sum(auth_stages, "total_energy_j", security_compute), stage_sum(fl_stages, "total_energy_j", security_compute)),
+        ("Total security-stage latency (ms)", stage_sum(auth_stages, "total_latency_ms", security_compute), stage_sum(fl_stages, "total_latency_ms", security_compute)),
         ("Total communication-stage energy (J)", stage_sum(auth_stages, "total_energy_j", any_comm), stage_sum(fl_stages, "total_energy_j", any_comm)),
         ("Total communication-stage latency (ms)", stage_sum(auth_stages, "total_latency_ms", any_comm), stage_sum(fl_stages, "total_latency_ms", any_comm)),
         ("FL-only communication energy (J)", 0.0, stage_sum(fl_stages, "total_energy_j", fl_comm)),
         ("FL-only communication latency (ms)", 0.0, stage_sum(fl_stages, "total_latency_ms", fl_comm)),
         ("FL-only computation energy (J)", 0.0, stage_sum(fl_stages, "total_energy_j", fl_compute)),
         ("FL-only computation latency (ms)", 0.0, stage_sum(fl_stages, "total_latency_ms", fl_compute)),
+        ("ECC-stage energy (J)", stage_sum(auth_stages, "total_energy_j", ecc_compute), stage_sum(fl_stages, "total_energy_j", ecc_compute)),
+        ("ECC-stage latency (ms)", stage_sum(auth_stages, "total_latency_ms", ecc_compute), stage_sum(fl_stages, "total_latency_ms", ecc_compute)),
         ("PBC-stage energy (J)", stage_sum(auth_stages, "total_energy_j", pbc_compute), stage_sum(fl_stages, "total_energy_j", pbc_compute)),
         ("PBC-stage latency (ms)", stage_sum(auth_stages, "total_latency_ms", pbc_compute), stage_sum(fl_stages, "total_latency_ms", pbc_compute)),
         ("FL communication events", 0.0, float(stage_count(fl_stages, fl_comm))),
