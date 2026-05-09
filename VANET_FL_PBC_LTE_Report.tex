@@ -1,0 +1,606 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{keywordblue}{RGB}{0,70,150}
+\definecolor{commentgreen}{RGB}{0,110,55}
+\definecolor{stringred}{RGB}{150,35,35}
+
+\lstdefinestyle{cppstyle}{
+  language=C++,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{keywordblue}\bfseries,
+  commentstyle=\color{commentgreen},
+  stringstyle=\color{stringred},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  breaklines=true,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  captionpos=b
+}
+
+\lstdefinestyle{cmdstyle}{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  captionpos=b
+}
+
+\newcommand{\codepath}[1]{\path{#1}}
+\newcommand{\ms}{\,\mathrm{ms}}
+
+\title{Implementation Report: PBC-Secured Federated Learning in VANET}
+\author{VANET ns-3 Security Research Workspace}
+\date{May 2, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents the implemented federated learning (FL) extension for the
+existing VANET security simulation. The implementation integrates hierarchical
+FL with the current pairing-based cryptography (PBC) VANET security model. The
+implemented flow uses vehicles as local learners, RSUs as edge aggregators, and
+the BS as the global aggregator. FL messages are protected using PBC signatures
+in the LTE experiment reported here. The report explains the protocol formulas,
+implementation mapping, run configuration, generated CSV files, and measured
+latency and power results from the LTE/PBC/FL run.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Purpose of the Implementation}
+
+The goal was to extend the existing VANET security simulator so that it can
+simulate a secure hierarchical federated learning workflow. The original
+security project already implemented vehicle registration, TA certification,
+KGC partial-key generation, PBC pseudonym material, PBC signing, PBC aggregate
+verification, and analytical power/latency measurement. The new FL extension
+adds the following learning workflow on top of that security layer:
+
+\begin{itemize}[leftmargin=*]
+  \item Vehicles receive a global model vector from their serving RSU.
+  \item Each selected vehicle computes a local model update.
+  \item Each selected vehicle applies deterministic pairwise masking.
+  \item Each selected vehicle signs its FL update using PBC.
+  \item RSUs verify received FL updates and perform edge aggregation.
+  \item The BS receives RSU aggregates and performs global aggregation.
+  \item FL round metrics, security latency, communication latency, and energy are written to CSV files.
+\end{itemize}
+
+The current ns-3 implementation is a lightweight model-vector simulation. It is
+not embedding TensorFlow inside ns-3. The real ML baseline remains in
+\codepath{Federated-Learning-VANET}, while ns-3 measures networking, security,
+latency, and energy behavior.
+
+\section{Implemented Architecture}
+
+The implemented architecture follows a three-layer hierarchy:
+
+\begin{center}
+\begin{tabular}{p{0.25\linewidth}p{0.60\linewidth}}
+\toprule
+\textbf{Layer} & \textbf{Role in FL workflow} \\
+\midrule
+Vehicles & Local learners. They compute local updates, add masks, and upload signed updates. \\
+RSUs & Edge aggregators. They distribute the global model, verify vehicle updates, and aggregate local updates. \\
+BS & Global aggregator. It collects RSU aggregates and computes the next global model. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The implemented communication path is:
+
+\[
+\text{BS} \rightarrow \text{RSU} \rightarrow \text{Vehicle}
+\rightarrow \text{RSU} \rightarrow \text{BS}
+\]
+
+The implemented security path is:
+
+\[
+\text{FL update bytes} \rightarrow \text{PBC signature} \rightarrow
+\text{RSU-side verification/aggregation}
+\]
+
+\section{Federated Learning Formulas}
+
+For each selected vehicle \(i\), the local dataset is \(D_i\), the current global
+model is \(w^{(t)}\), and the local loss is:
+
+\[
+F_i(w)=\frac{1}{|D_i|}\sum_{x\in D_i}\ell(w;x)
+\]
+
+The local update is represented as:
+
+\[
+w_i^{(t+1)} = w^{(t)} - \eta \nabla F_i(w^{(t)})
+\]
+
+For secure aggregation, each vehicle applies a mask \(r_i^{(t)}\):
+
+\[
+\widetilde{w}_i^{(t+1)} = w_i^{(t+1)} + r_i^{(t)}
+\]
+
+The implementation uses deterministic pairwise masks inside each RSU group so
+that the weighted masks cancel during edge aggregation:
+
+\[
+\sum_{i\in V_r}\frac{|D_i|}{D_r}r_i^{(t)} = 0
+\]
+
+where:
+
+\[
+D_r = \sum_{j\in V_r}|D_j|
+\]
+
+The RSU computes the edge aggregate:
+
+\[
+\widetilde{w}_r^{(t+1)}=
+\sum_{i\in V_r}\frac{|D_i|}{D_r}\widetilde{w}_i^{(t+1)}
+\]
+
+Because the masks cancel, this becomes:
+
+\[
+\widetilde{w}_r^{(t+1)}=
+\sum_{i\in V_r}\frac{|D_i|}{D_r}w_i^{(t+1)}
+\]
+
+The BS computes the global model:
+
+\[
+w^{(t+1)}=\sum_{r\in R}\frac{D_r}{\sum_{k\in R}D_k}\widetilde{w}_r^{(t+1)}
+\]
+
+Expanded over vehicles:
+
+\[
+w^{(t+1)}=\sum_{r\in R}\sum_{i\in V_r}
+\frac{|D_i|}{\sum_{j\in V'}|D_j|}w_i^{(t+1)}
+\]
+
+\section{PBC Security Integration}
+
+The FL extension reuses the PBC security primitives already implemented in the
+VANET security module. For each FL update, the vehicle signs the serialized FL
+payload. The signed material includes the active pseudonym, public verification
+key, random commitment, and signature component.
+
+The PBC signing equation used by the simulator is:
+
+\[
+\psi_i = S_i + x_iX + w_iR_i
+\]
+
+where:
+
+\begin{itemize}[leftmargin=*]
+  \item \(S_i\) is the KGC-issued partial private key.
+  \item \(x_i\) is the vehicle private verification scalar.
+  \item \(Q_i=x_iP\) is the corresponding public verification key.
+  \item \(w_i\) is per-message signing randomness.
+  \item \(W_i=w_iP\) is the random commitment.
+  \item \(X=H(\theta)\), where \(\theta\) is the FL round state.
+  \item \(R_i=H(\theta\parallel M_i\parallel PID_i\parallel Q_i\parallel W_i)\).
+\end{itemize}
+
+The aggregate verification equation is:
+
+\[
+e(\Psi,P) \stackrel{?}{=}
+e(P_{pub},\sum_i\Pi_i)\cdot e(X,\sum_iQ_i)\cdot
+\prod_i e(R_i,W_i)
+\]
+
+where:
+
+\[
+\Psi=\sum_i\psi_i
+\]
+
+\section{Implementation Mapping}
+
+\begin{longtable}{p{0.27\linewidth}p{0.62\linewidth}}
+\toprule
+\textbf{Implementation item} & \textbf{Implemented responsibility} \\
+\midrule
+\codepath{vanet-message.h} & Adds FL message types: \codepath{FL_ROUND_START}, \codepath{FL_MODEL_DOWNLOAD}, \codepath{FL_UPDATE_UPLOAD}, \codepath{FL_RSU_AGGREGATE}, \codepath{FL_GLOBAL_MODEL}, and \codepath{FL_ROUND_DONE}. \\
+\codepath{fl-vanet-apps.h/.cc} & Implements vehicle-side local training, masking, PBC/ECC signing, RSU update verification, RSU edge aggregation, BS global aggregation, and FL CSV logging. \\
+\codepath{vanet-security-lte.cc} & Adds LTE command-line flags and installs FL BS, RSU, and vehicle apps. \\
+\codepath{vanet-security-nr.cc} & Adds the same FL support for NR/6G-like experiments. \\
+\codepath{vanet-power-model.cc} & Reused to record computation latency, communication airtime, security energy, communication energy, and stage summaries. \\
+\codepath{Federated-Learning-VANET/train_fl_baseline.py} & Provides the external Python ML baseline for real model accuracy, precision, recall, and loss. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Core Implementation Sketch}
+
+\begin{lstlisting}[style=cppstyle,caption={Simplified implementation sketch of the FL/PBC flow.}]
+// BS round start
+payload = Serialize(round, globalModel);
+SendToEachRsu(FL_MODEL_DOWNLOAD, payload);
+
+// Vehicle local update
+localModel = globalModel;
+localModel[d] -= learningRate * SyntheticGradient(vehicleId, round, d);
+maskedUpdate = localModel + PairwiseMask(vehicleId, rsuGroup, round);
+
+// Vehicle PBC signing
+pid = EncodePid(pid1, pid2, tiUs);
+theta = "fl-round-" + round;
+SignMessage(partialKey, secretXi, pid, theta, payload, wi, psi);
+SendToRsu(FL_UPDATE_UPLOAD, payload, pbcAuthHeader);
+
+// RSU aggregation
+VerifyAggregate(pidList, qiList, wiList, messageList, theta, aggregatePsi);
+edgeModel = Sum_i((datasetSize_i / rsuDatasetTotal) * update_i);
+SendToBs(FL_RSU_AGGREGATE, edgeModel);
+
+// BS global aggregation
+globalModel = Sum_r((rsuDatasetTotal_r / totalDataset) * edgeModel_r);
+WriteFlCsvRow(round);
+\end{lstlisting}
+
+\section{Experiment Configuration}
+
+The reported experiment used the following command:
+
+\begin{lstlisting}[style=cmdstyle,caption={LTE PBC federated learning run command.}]
+LSAN_OPTIONS=detect_leaks=0 ./ns3 run "vanet-security-lte \
+  --securityMode=pbc \
+  --enableFl=true \
+  --flSecurityMode=pbc \
+  --flRounds=3 \
+  --flParticipants=10 \
+  --flModelDim=16 \
+  --simTime=30 \
+  --progressLog=true \
+  --outCsv=results/fl/lte_pbc_fl_power.csv \
+  --stageCsv=results/fl/lte_pbc_fl_stages.csv \
+  --flCsv=results/fl/lte_pbc_fl.csv \
+  --flStageCsv=results/fl/lte_pbc_fl_stage_summary.csv"
+\end{lstlisting}
+
+The run configuration was:
+
+\begin{center}
+\begin{tabular}{p{0.35\linewidth}p{0.45\linewidth}}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Network label & \codepath{5g_lte} \\
+Security mode & \codepath{pbc} \\
+Simulation time & 30 seconds \\
+FL rounds requested & 3 \\
+FL participants & 10 vehicles \\
+RSU count & 2 \\
+Model dimension & 16 parameters \\
+FL masking & Enabled \\
+Power model & Analytical CPU/radio energy model \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Generated Output Files}
+
+\begin{longtable}{p{0.35\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{File} & \textbf{Purpose} \\
+\midrule
+\codepath{results/fl/lte_pbc_fl.csv} & Completed FL round summary. A row is written only when a BS global aggregation round completes. \\
+\codepath{results/fl/lte_pbc_fl_power.csv} & Periodic VANET-wide power, latency, infection, registration, KGC, and TA metrics. \\
+\codepath{results/fl/lte_pbc_fl_stages.csv} & Stage-level latency and energy for security, communication, and FL stages. \\
+\codepath{results/fl/lte_pbc_fl_stage_summary.csv} & Same stage-level summary written under the FL security label. \\
+\codepath{results/fl/lte_pbc_fl_report.md} & Human-readable Markdown report generated from the CSV files. \\
+\bottomrule
+\end{longtable}
+
+\section{Completed FL Round Results}
+
+The main FL result row is shown in Table~\ref{tab:fl-round}. The row proves that
+one complete global FL round finished successfully.
+
+\begin{table}[h]
+\centering
+\caption{Completed LTE/PBC/FL round.}
+\label{tab:fl-round}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Completion time & 10.402010 s \\
+Round completed & 0 \\
+Network label & 5g\_lte \\
+Security mode & pbc \\
+Selected vehicles & 10 \\
+RSUs & 2 \\
+Updates sent & 10 \\
+Updates verified & 10 \\
+Updates rejected & 0 \\
+RSU edge aggregates sent & 2 \\
+Global round completed & 1 \\
+Model download bytes & 1632 \\
+Update upload bytes & 1440 \\
+Loss proxy & 0.500000 \\
+Accuracy proxy & 0.500000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The most important correctness result is:
+
+\[
+\text{updates\_sent}=10,\quad
+\text{updates\_verified}=10,\quad
+\text{updates\_rejected}=0
+\]
+
+This means every submitted FL update passed the PBC-secured verification path in
+this clean run.
+
+\section{FL Latency and Energy Results}
+
+\begin{table}[h]
+\centering
+\caption{FL round latency and energy at global completion time.}
+\label{tab:fl-latency-energy}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Average local training latency & 0.002526 ms \\
+Average update signing latency & 18.265342 ms \\
+Average update verification latency & 89.195864 ms \\
+Average RSU edge aggregation latency & 0.002608 ms \\
+Average BS global aggregation latency & 0.007223 ms \\
+Security energy at FL completion & 92.456386 J \\
+Communication energy at FL completion & 2.002021 J \\
+Total energy at FL completion & 94.458407 J \\
+Average power at FL completion & 9.080784 W \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The latency results show that local training, masking, edge aggregation, and
+global aggregation are very small in the lightweight ns-3 FL model. The dominant
+operations are PBC signing and PBC aggregate verification.
+
+\section{Final VANET-Wide Power and Delay Results}
+
+The final periodic CSV row was recorded at simulated time 29 seconds. These
+values describe the entire LTE/PBC/FL simulation state near the end of the run.
+
+\begin{table}[h]
+\centering
+\caption{Final VANET-wide LTE/PBC/FL metrics at 29 seconds.}
+\label{tab:final-power}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Infected ratio & 1.000000 \\
+Propagation distance & 103.2 \\
+Verification failures & 0 \\
+Average V2V delay & 1113.69 ms \\
+Average V2I uplink delay & 18.927 ms \\
+Average V2I downlink delay & 1368.4 ms \\
+Average V2I RTT & 1382.54 ms \\
+Average registration delay & 495.8 ms \\
+Average KGC RTT & 8.07766 ms \\
+Average TA RTT & 8.06223 ms \\
+Security energy & 312.084 J \\
+Communication energy & 5.54503 J \\
+Total energy & 317.629 J \\
+Average security power & 10.7615 W \\
+Average communication power & 0.191208 W \\
+Average total power & 10.9527 W \\
+Average signing latency & 22.2315 ms \\
+Average aggregation latency & 0.173781 ms \\
+Average verification latency & 98.1813 ms \\
+Average partial-key latency & 5.31927 ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The final result shows that security computation dominates total energy:
+
+\[
+E_{security}=312.084\,J,\quad E_{communication}=5.54503\,J
+\]
+
+Thus:
+
+\[
+\frac{E_{security}}{E_{total}}\approx
+\frac{312.084}{317.629}=98.25\%
+\]
+
+This confirms that, in this PBC-secured LTE experiment, cryptographic processing
+is much more expensive than analytical radio communication energy.
+
+\section{FL Stage-Level Results}
+
+\begin{longtable}{p{0.25\linewidth}p{0.20\linewidth}r r r}
+\caption{FL-specific communication and computation stages.}\label{tab:fl-stages}\\
+\toprule
+\textbf{Stage} & \textbf{Role} & \textbf{Count} & \textbf{Avg. ms} & \textbf{Energy J} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Stage} & \textbf{Role} & \textbf{Count} & \textbf{Avg. ms} & \textbf{Energy J} \\
+\midrule
+\endhead
+communication\_rx & bs:fl\_rsu\_aggregate\_upload & 3 & 0.014160 & 0.000212 \\
+communication\_rx & rsu:fl\_model\_download & 4 & 0.012880 & 0.000258 \\
+communication\_rx & rsu:fl\_update\_upload & 19 & 0.057200 & 0.005434 \\
+communication\_rx & vehicle:fl\_model\_download & 20 & 0.012880 & 0.000206 \\
+communication\_tx & bs:fl\_model\_download & 4 & 0.012880 & 0.000052 \\
+communication\_tx & rsu:fl\_model\_download & 20 & 0.012880 & 0.000258 \\
+communication\_tx & rsu:fl\_rsu\_aggregate\_upload & 3 & 0.014160 & 0.000042 \\
+communication\_tx & vehicle:fl\_update\_upload & 19 & 0.057200 & 0.000217 \\
+fl\_edge\_aggregate & rsu & 3 & 0.002431 & 0.000109 \\
+fl\_global\_aggregate & bs & 1 & 0.007223 & 0.000108 \\
+fl\_local\_train & vehicle & 19 & 0.002572 & 0.000122 \\
+fl\_mask\_generate & vehicle & 19 & 0.001457 & 0.000069 \\
+\bottomrule
+\end{longtable}
+
+The stage counts show that round 0 completed and round 1 partially progressed.
+A completed round with 10 vehicles and 2 RSUs requires 10 vehicle updates, 2 RSU
+edge aggregates, and 1 BS global aggregate. The CSV contains:
+
+\[
+\text{fl\_global\_aggregate count}=1
+\]
+
+Therefore, exactly one complete BS global FL round was recorded. The larger
+counts for model downloads and update uploads indicate that the next FL round
+started before the simulation ended.
+
+\section{PBC Security Stage Results}
+
+\begin{longtable}{p{0.30\linewidth}p{0.17\linewidth}r r r}
+\caption{PBC security stages during LTE/PBC/FL run.}\label{tab:pbc-stages}\\
+\toprule
+\textbf{Stage} & \textbf{Role} & \textbf{Count} & \textbf{Avg. ms} & \textbf{Energy J} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Stage} & \textbf{Role} & \textbf{Count} & \textbf{Avg. ms} & \textbf{Energy J} \\
+\midrule
+\endhead
+pbc\_aggregate & bs\_relay & 215 & 0.172608 & 0.556660 \\
+pbc\_full\_key & vehicle & 60 & 1.792057 & 0.268808 \\
+pbc\_partial\_key & kgc & 60 & 5.319274 & 4.787346 \\
+pbc\_pid2 & ta & 60 & 1.691061 & 1.521955 \\
+pbc\_sign & vehicle & 49 & 22.315887 & 2.733696 \\
+pbc\_verify\_aggregate & bs\_relay & 215 & 97.382770 & 314.059434 \\
+\bottomrule
+\end{longtable}
+
+The most expensive security operation is PBC aggregate verification:
+
+\[
+\text{avg latency}=97.382770\ms,
+\quad \text{energy}=314.059434\,J
+\]
+
+This is the main reason that security energy dominates communication energy in
+this run. The PBC stage labels are shared by the existing VANET PBC relay path
+and the FL update verification path, so Table~\ref{tab:pbc-stages} should be
+read as the total PBC workload during the LTE/PBC/FL simulation.
+
+\section{Interpretation of the Results}
+
+The run demonstrates four important outcomes.
+
+\subsection{The FL Pipeline Completed Correctly}
+
+The completed FL row shows that 10 updates were sent, 10 were verified, and 0
+were rejected. Both RSUs sent their edge aggregates, and the BS completed one
+global aggregation round. This proves that the vehicle--RSU--BS hierarchical FL
+pipeline is active and connected to the PBC security layer.
+
+\subsection{Security Verification Is the Main Cost}
+
+The average update signing latency at FL completion was 18.265342 ms, while the
+average update verification latency was 89.195864 ms. The final stage summary
+also shows that PBC aggregate verification consumed 314.059434 J, which is much
+larger than the FL aggregation computation itself. This means PBC security is
+computationally expensive, especially at the verification side.
+
+\subsection{Communication Energy Is Small Compared with Security Energy}
+
+At the end of the run, security energy was 312.084 J and communication energy
+was 5.54503 J. Thus, almost all measured energy came from cryptographic
+processing. This is an important research finding because it shows that, for
+PBC-secured VANET-FL, optimizing verification cost may be more important than
+optimizing packet airtime.
+
+\subsection{The FL Model Is Lightweight in ns-3}
+
+The local training and aggregation latencies are very small because the ns-3 FL
+implementation intentionally uses lightweight numeric vectors. This allows the
+simulation to focus on communication, PBC security, latency, and power. Real ML
+accuracy, precision, recall, and loss are handled by the Python baseline in
+\codepath{Federated-Learning-VANET}.
+
+\section{Limitations and Notes}
+
+\begin{itemize}[leftmargin=*]
+  \item The ns-3 FL implementation uses synthetic gradients and model vectors; it does not train TensorFlow models inside ns-3.
+  \item The reported accuracy and loss in ns-3 are proxy values used to indicate FL progress, not real ML accuracy.
+  \item The PBC stage labels include both VANET PBC relay traffic and FL PBC update traffic.
+  \item Only one full FL round completed in this 30-second run. Later rounds partially progressed but did not complete before simulation stop.
+  \item To complete all requested three FL rounds, the simulation should be run for a longer duration such as 90 seconds.
+\end{itemize}
+
+\section{Recommended Next Run}
+
+For a cleaner multi-round professor demo, run:
+
+\begin{lstlisting}[style=cmdstyle,caption={Recommended three-round LTE/PBC/FL run.}]
+LSAN_OPTIONS=detect_leaks=0 ./ns3 run "vanet-security-lte \
+  --securityMode=pbc \
+  --enableFl=true \
+  --flSecurityMode=pbc \
+  --flRounds=3 \
+  --flParticipants=10 \
+  --flModelDim=16 \
+  --simTime=90 \
+  --progressLog=true \
+  --outCsv=results/fl/lte_pbc_fl_power_90s.csv \
+  --stageCsv=results/fl/lte_pbc_fl_stages_90s.csv \
+  --flCsv=results/fl/lte_pbc_fl_90s.csv \
+  --flStageCsv=results/fl/lte_pbc_fl_stage_summary_90s.csv"
+\end{lstlisting}
+
+Then verify completed FL rounds with:
+
+\begin{lstlisting}[style=cmdstyle,caption={Commands to check FL completion.}]
+cat results/fl/lte_pbc_fl_90s.csv
+grep -E "fl_edge_aggregate|fl_global_aggregate|fl_rsu_aggregate_upload" \
+  results/fl/lte_pbc_fl_stages_90s.csv
+\end{lstlisting}
+
+\section{Conclusion}
+
+The LTE/PBC/FL implementation successfully integrates federated learning with
+the existing VANET PBC security model. The completed run proves that vehicles
+can receive a global model, compute masked local updates, sign the updates,
+upload them to RSUs, and contribute to a BS-level global aggregation round. The
+results also show that PBC verification dominates both latency and energy. This
+makes PBC aggregate verification the main optimization target for future secure
+VANET federated learning experiments.
+
+\end{document}

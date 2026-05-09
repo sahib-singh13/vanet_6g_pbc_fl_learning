@@ -1,0 +1,5 @@
+time,infected_ratio,propagation_distance,verification_failures,avg_v2v_delay_ms,avg_v2i_uplink_ms,avg_v2i_downlink_ms,avg_v2i_rtt_ms,avg_reg_delay_ms,avg_kgc_rtt_ms,avg_ta_rtt_ms
+1,0.02,0,0,0,14.3608,6.0406,20.401,41.1579,8.08891,8.06267
+2,0.02,0,0,0,15.4835,5.82702,21.3101,46.5,8.09084,8.06265
+3,0.02,0,0,0,14.7464,5.4645,20.2105,46.5,8.0909,8.06265
+4,0.02,0,0,0,14.4849,5.33584,19.8204,46.5,8.09092,8.06265

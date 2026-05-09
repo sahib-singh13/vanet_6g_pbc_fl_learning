@@ -1,0 +1,538 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{commentgreen}{RGB}{0,110,55}
+\definecolor{keywordblue}{RGB}{0,70,150}
+\definecolor{stringred}{RGB}{150,35,35}
+
+\lstdefinestyle{cppstyle}{
+  language=C++,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{keywordblue}\bfseries,
+  commentstyle=\color{commentgreen},
+  stringstyle=\color{stringred},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  stepnumber=1,
+  numbersep=6pt,
+  breaklines=true,
+  breakatwhitespace=false,
+  tabsize=2,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  captionpos=b
+}
+
+\newcommand{\codepath}[1]{\path{#1}}
+
+\title{Clarification Report on PBC Parameters, Hashing, Full Keys, and State Information}
+\author{VANET ns-3 Security Research Workspace}
+\date{April 29, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This short report answers four implementation-level questions about the current
+pairing-based cryptography (PBC) security flow in the VANET ns-3 module. It
+focuses only on the main points needed for explanation: how the KGC and TA
+secrets are selected, how the hash function \(H_1\) is implemented, whether the
+vehicle secret \(x_i\) and group elements are in the expected algebraic sets, and
+how \(Q_i\) differs from the state information \(\theta\) used during signature
+generation.
+\end{abstract}
+
+\section{Quick Answer Summary}
+
+\begin{longtable}{p{0.24\linewidth}p{0.68\linewidth}}
+\toprule
+\textbf{Question} & \textbf{Short implementation answer} \\
+\midrule
+Stage 1: are \(s\) and \(t\) random or from \(\mathbb{Z}_q^*\)? &
+They are selected randomly using PBC \codepath{element_random} after being
+initialized in \codepath{Zr}. In this implementation, \codepath{Zr} is the scalar
+field of order \(r\) from the Type A pairing parameters. The code does not
+hard-code 160 bits; the approximately 160-bit scalar order comes from the
+pairing parameter \codepath{r}. \\
+\midrule
+Partial key: what is \(H_1\)? Is it SHA-256? &
+For partial key generation, \(H_1\) is implemented as \codepath{HashToG1}, which
+uses PBC \codepath{element_from_hash} to map bytes into \(G_1\). SHA-256 is used
+separately for PID2 masking, not for the \(\Pi_i=H_1(PID_i\parallel P_{pub})\)
+step. \\
+\midrule
+Full key: is \(x_i\in\mathbb{Z}_q^*\) and are \(P,S_i\in G_1\)? &
+Yes in the practical PBC notation: \(x_i\) is initialized in \codepath{Zr} and
+randomly sampled; \(P\), \(S_i\), \(Q_i\), \(W_i\), \(X\), \(R_i\), and
+\(\psi_i\) are initialized as \codepath{G1} elements. Strictly speaking, the code
+samples from \(\mathbb{Z}_r\), not explicitly \(\mathbb{Z}_r^*\), because it does
+not resample if zero occurs. \\
+\midrule
+How is \(Q\) chosen as state info? &
+\(Q_i\) is not the state information. \(Q_i=x_iP\) is the vehicle public
+verification key. The state information is \(\theta\), implemented as the
+\codepath{StateInfo} string with default value \codepath{traffic-alert}. The
+signature uses both \(Q_i\) and \(\theta\). \\
+\bottomrule
+\end{longtable}
+
+\section{Question 1: Selection of \texorpdfstring{\(s\)}{s} and \texorpdfstring{\(t\)}{t}}
+
+\subsection{Formula}
+
+In the five-stage PBC protocol, the KGC selects a master secret \(s\), and the TA
+selects a master secret \(t\):
+
+\[
+  s \xleftarrow{\$} \mathbb{Z}_r, \qquad P_{pub}=sP
+\]
+
+\[
+  t \xleftarrow{\$} \mathbb{Z}_r, \qquad T_{pub}=tP
+\]
+
+Some papers write the scalar set as \(\mathbb{Z}_q^*\). The current code uses the
+PBC library's scalar field name \codepath{Zr}. In the Type A parameters, \(r\) is
+the group/scalar order. Therefore, for this implementation, the closest mapping
+is:
+
+\[
+  \mathbb{Z}_q^*\text{ in paper notation} \approx \mathbb{Z}_r^*\text{ in PBC notation}
+\]
+
+The code samples randomly from \(\mathbb{Z}_r\). It does not explicitly check for
+non-zero, so it is not a strict \(\mathbb{Z}_r^*\) sampler. The probability of
+sampling zero is negligible, about \(1/r\), but a strict implementation can add a
+resampling check.
+
+\subsection{Code Evidence}
+
+The generator point \(P\) is initialized in \(G_1\), and then \(s\) and \(t\) are
+initialized in \codepath{Zr} and randomized.
+
+\begin{lstlisting}[style=cppstyle,caption={Setup code for P, s, Ppub, t, and Tpub.}]
+element_init_G1(m_P, m_pairing);
+const char kGeneratorSeed[] = "VANET_PBC_GENERATOR_SEED_V1";
+element_from_hash(m_P,
+                  const_cast<void*>(static_cast<const void*>(kGeneratorSeed)),
+                  static_cast<int>(sizeof(kGeneratorSeed) - 1));
+m_hasP = true;
+
+// KGC setup: s in Zr and Ppub = sP
+element_init_Zr(m_s, m_pairing);
+element_random(m_s);
+element_init_G1(m_Ppub, m_pairing);
+element_mul_zn(m_Ppub, m_P, m_s);
+
+// TA setup: t in Zr and Tpub = tP
+element_init_Zr(m_t, m_pairing);
+element_random(m_t);
+element_init_G1(m_Tpub, m_pairing);
+element_mul_zn(m_Tpub, m_P, m_t);
+\end{lstlisting}
+
+The Type A pairing parameters used by LTE/NR include the scalar order \(r\):
+
+\begin{lstlisting}[style=cppstyle,caption={Type A pairing parameters used by the scenario.}]
+std::string pbcParams = R"(type a
+q 5016916071032417911863923687783915420518698834988272735086782217043042258214706291487114949230487855429610676959493682417064495802878387205742192057730447
+h 6865426548812704696509566582849235473375093961437097302961574578811789461292366439277723796099293963270768
+r 730750818665452757176057050065048642452048576511
+exp2 159
+exp1 110
+sign1 1
+sign0 -1
+)";
+\end{lstlisting}
+
+\subsection{Conclusion}
+
+\begin{itemize}[leftmargin=*]
+  \item \(s\) and \(t\) are selected randomly.
+  \item They are selected from PBC \codepath{Zr}, whose order is defined by the pairing parameter \(r\).
+  \item The implementation does not manually choose a 160-bit prime in code; the 160-bit scalar order comes from the pairing parameters.
+  \item In paper notation this may be written as \(\mathbb{Z}_q^*\); in this code the corresponding PBC scalar field is \(\mathbb{Z}_r\), with \(r\) as the group order.
+\end{itemize}
+
+\section{Question 2: What Algorithm Implements \texorpdfstring{\(H_1\)}{H1}?}
+
+\subsection{Formula}
+
+Partial private key generation uses:
+
+\[
+  PID_i = PID1_i \parallel PID2_i \parallel T_i
+\]
+
+\[
+  \Pi_i = H_1(PID_i \parallel P_{pub})
+\]
+
+\[
+  S_i = s\Pi_i
+\]
+
+Here \(H_1\) must output a point in \(G_1\), not just a fixed-size byte digest.
+That means \(H_1\) is a hash-to-group function.
+
+\subsection{Code Evidence}
+
+The current implementation first encodes the pseudonym, then appends
+\(P_{pub}\), and finally maps the resulting bytes into \(G_1\).
+
+\begin{lstlisting}[style=cppstyle,caption={PID encoding and partial key generation.}]
+bool
+PbcCrypto::EncodePid(const std::vector<uint8_t>& pid1Bytes,
+                     const std::vector<uint8_t>& pid2Bytes,
+                     uint64_t tiUs,
+                     std::vector<uint8_t>& pidBytes)
+{
+  pidBytes.clear();
+  WriteUint16(pidBytes, static_cast<uint16_t>(pid1Bytes.size()));
+  WriteBytes(pidBytes, pid1Bytes);
+  WriteUint16(pidBytes, static_cast<uint16_t>(pid2Bytes.size()));
+  WriteBytes(pidBytes, pid2Bytes);
+  WriteUint64(pidBytes, tiUs);
+  return true;
+}
+
+bool
+PbcCrypto::ComputePi(const std::vector<uint8_t>& pidBytes,
+                     std::vector<uint8_t>& piBytes)
+{
+  std::vector<uint8_t> ppubBytes = GetPpubBytes();
+  std::vector<uint8_t> input;
+  input.insert(input.end(), pidBytes.begin(), pidBytes.end());
+  input.insert(input.end(), ppubBytes.begin(), ppubBytes.end());
+  return HashToG1(input, piBytes);
+}
+
+bool
+PbcCrypto::ComputePartialKey(const std::vector<uint8_t>& pid1Bytes,
+                             const std::vector<uint8_t>& pid2Bytes,
+                             uint64_t tiUs,
+                             std::vector<uint8_t>& siBytes)
+{
+  std::vector<uint8_t> pidBytes;
+  EncodePid(pid1Bytes, pid2Bytes, tiUs, pidBytes);
+
+  std::vector<uint8_t> piBytes;
+  ComputePi(pidBytes, piBytes);
+
+  element_t pi;
+  element_t si;
+  element_init_G1(pi, m_pairing);
+  element_init_G1(si, m_pairing);
+  element_from_bytes(pi, piBytes.data());
+  element_mul_zn(si, pi, m_s);   // Si = s * Pi
+  return EncodeElement(si, siBytes);
+}
+\end{lstlisting}
+
+The actual \(H_1\) implementation is:
+
+\begin{lstlisting}[style=cppstyle,caption={HashToG1 implementation used for H1.}]
+bool
+PbcCrypto::HashToG1(const std::vector<uint8_t>& data, std::vector<uint8_t>& out)
+{
+  if (!m_initialized || data.empty())
+  {
+    return false;
+  }
+  element_t tmp;
+  element_init_G1(tmp, m_pairing);
+  element_from_hash(
+      tmp, const_cast<void*>(static_cast<const void*>(data.data())),
+      static_cast<int>(data.size()));
+  bool ok = EncodeElement(tmp, out);
+  element_clear(tmp);
+  return ok;
+}
+\end{lstlisting}
+
+\subsection{Important Distinction from SHA-256}
+
+SHA-256 is used in PID2 generation, not in \(H_1\) for partial key generation.
+The PID2 masking formula is:
+
+\[
+  q_i=tPID1_i,
+  \qquad h_i=\operatorname{SHA256}(q_i\parallel T_{pub}),
+  \qquad PID2_i=ID_i\oplus h_i[0..3]
+\]
+
+\begin{lstlisting}[style=cppstyle,caption={SHA-256 is used for PID2 masking.}]
+element_mul_zn(q, pid1, m_t);
+EncodeElement(q, qBytes);
+EncodeElement(m_Tpub, tpubBytes);
+
+std::vector<uint8_t> hashInput;
+hashInput.insert(hashInput.end(), qBytes.begin(), qBytes.end());
+hashInput.insert(hashInput.end(), tpubBytes.begin(), tpubBytes.end());
+std::vector<uint8_t> digest = EccCrypto::Sha256(hashInput.data(), hashInput.size());
+
+pid2Bytes[0] = idBytes[0] ^ digest[0];
+pid2Bytes[1] = idBytes[1] ^ digest[1];
+pid2Bytes[2] = idBytes[2] ^ digest[2];
+pid2Bytes[3] = idBytes[3] ^ digest[3];
+\end{lstlisting}
+
+\subsection{Conclusion}
+
+\begin{itemize}[leftmargin=*]
+  \item \(H_1\) is not an encryption algorithm.
+  \item \(H_1\) is implemented as \codepath{HashToG1} using PBC \codepath{element_from_hash}.
+  \item The input to \(H_1\) for partial key generation is \(PID_i\parallel P_{pub}\).
+  \item SHA-256 is used for PID2 masking, not for \(\Pi_i=H_1(PID_i\parallel P_{pub})\).
+\end{itemize}
+
+\section{Question 3: Full Key Generation and Algebraic Sets}
+
+\subsection{Formula}
+
+The vehicle full key generation should satisfy:
+
+\[
+  x_i \xleftarrow{\$} \mathbb{Z}_r, \qquad Q_i=x_iP
+\]
+
+For signing, the implementation should use:
+
+\[
+  S_i,P,Q_i,W_i,X,R_i,\psi_i \in G_1
+\]
+
+\[
+  x_i,w_i \in \mathbb{Z}_r
+\]
+
+\[
+  \psi_i = S_i + x_iX + w_iR_i
+\]
+
+\subsection{Code Evidence: Vehicle Verification Key}
+
+\begin{lstlisting}[style=cppstyle,caption={Vehicle xi is sampled in Zr and Qi is computed in G1.}]
+bool
+PbcCrypto::GenerateVerificationKey(std::vector<uint8_t>& xiBytes,
+                                   std::vector<uint8_t>& qiBytes)
+{
+  element_t xi;
+  element_t qi;
+  element_init_Zr(xi, m_pairing);  // xi in Zr
+  element_init_G1(qi, m_pairing);  // Qi in G1
+  element_random(xi);
+  element_mul_zn(qi, m_P, xi);     // Qi = xi * P
+
+  bool ok = EncodeElement(xi, xiBytes) && EncodeElement(qi, qiBytes);
+  element_clear(qi);
+  element_clear(xi);
+  return ok;
+}
+\end{lstlisting}
+
+The vehicle calls this after it receives the KGC partial key \(S_i\):
+
+\begin{lstlisting}[style=cppstyle,caption={Vehicle generates Qi after receiving partial key.}]
+if (siLen > 0)
+{
+  m_partialKey = siBytes;
+  if (m_enablePbc)
+  {
+    if (!m_pbc.GenerateVerificationKey(m_secretXi, m_publicQi))
+    {
+      m_secretXi.clear();
+      m_publicQi.clear();
+    }
+  }
+}
+\end{lstlisting}
+
+\subsection{Code Evidence: Signature Elements}
+
+\begin{lstlisting}[style=cppstyle,caption={Signature generation uses Zr scalars and G1 group elements.}]
+element_t si;
+element_t xi;
+element_t qi;
+element_t wi;
+element_t wiPoint;
+element_t x;
+element_t ri;
+element_t xiX;
+element_t wiRi;
+element_t psi;
+
+element_init_G1(si, m_pairing);       // Si in G1
+element_init_Zr(xi, m_pairing);       // xi in Zr
+element_init_G1(qi, m_pairing);       // Qi in G1
+element_init_Zr(wi, m_pairing);       // wi in Zr
+element_init_G1(wiPoint, m_pairing);  // Wi in G1
+element_init_G1(x, m_pairing);        // X in G1
+element_init_G1(ri, m_pairing);       // Ri in G1
+element_init_G1(xiX, m_pairing);      // xi * X in G1
+element_init_G1(wiRi, m_pairing);     // wi * Ri in G1
+element_init_G1(psi, m_pairing);      // psi in G1
+
+element_from_bytes(si, siBytes.data());
+element_from_bytes(xi, xiBytes.data());
+element_mul_zn(qi, m_P, xi);
+
+element_random(wi);
+element_mul_zn(wiPoint, m_P, wi);     // Wi = wi * P
+
+ComputeX(thetaBytes, xBytes);
+ComputeRi(thetaBytes, messageBytes, pidBytes, qiBytes, wiBytes, riBytes);
+element_from_bytes(x, xBytes.data());
+element_from_bytes(ri, riBytes.data());
+
+element_mul_zn(xiX, x, xi);           // xi * X
+element_mul_zn(wiRi, ri, wi);         // wi * Ri
+element_set(psi, si);
+element_add(psi, psi, xiX);
+element_add(psi, psi, wiRi);          // psi = Si + xiX + wiRi
+\end{lstlisting}
+
+\subsection{Conclusion}
+
+\begin{itemize}[leftmargin=*]
+  \item Yes, \(x_i\) is currently generated as a random \codepath{Zr} element.
+  \item Yes, \(P\), \(S_i\), \(Q_i\), \(W_i\), \(X\), \(R_i\), and \(\psi_i\) are handled as \codepath{G1} elements.
+  \item The only strict-theory caveat is that the code does not explicitly reject zero for \(x_i\) or \(w_i\). For strict \(\mathbb{Z}_r^*\), a resampling loop can be added.
+\end{itemize}
+
+\section{Question 4: Is \texorpdfstring{\(Q_i\)}{Qi} the State Information?}
+
+\subsection{Clarification}
+
+\(Q_i\) is not the state information. The implementation has two different
+objects:
+
+\begin{itemize}[leftmargin=*]
+  \item \(Q_i=x_iP\): the vehicle's public verification key.
+  \item \(\theta\): shared state information used by the PBC signature formula.
+\end{itemize}
+
+The signature formula uses both:
+
+\[
+  X = H_1(\theta)
+\]
+
+\[
+  R_i = H_1(\theta \parallel M_i \parallel PID_i \parallel Q_i \parallel W_i)
+\]
+
+\[
+  \psi_i = S_i + x_iX + w_iR_i
+\]
+
+So \(Q_i\) is included inside the hash for \(R_i\), but \(Q_i\) is not equal to
+\(\theta\).
+
+\subsection{Code Evidence: State Info Attribute}
+
+\begin{lstlisting}[style=cppstyle,caption={Vehicle state info theta is a string attribute.}]
+.AddAttribute("StateInfo",
+              "Shared state information theta for PBC V2V signatures.",
+              StringValue("traffic-alert"),
+              MakeStringAccessor(&VehicleApp::m_stateInfo),
+              MakeStringChecker())
+\end{lstlisting}
+
+\subsection{Code Evidence: Signature Input Uses Both Theta and Qi}
+
+\begin{lstlisting}[style=cppstyle,caption={Vehicle signs using theta and sends Qi separately.}]
+std::vector<uint8_t> pidBytes;
+std::vector<uint8_t> thetaBytes(m_stateInfo.begin(), m_stateInfo.end());
+std::vector<uint8_t> wiBytes;
+std::vector<uint8_t> psiBytes;
+
+m_pbc.EncodePid(m_pid1, m_pid2, m_pidTiUs, pidBytes);
+m_pbc.SignMessage(m_partialKey,
+                  m_secretXi,
+                  pidBytes,
+                  thetaBytes,
+                  payload,
+                  wiBytes,
+                  psiBytes);
+
+VanetPbcAuthHeader auth;
+auth.SetState(thetaBytes);   // theta
+auth.SetPid1(m_pid1);
+auth.SetPid2(m_pid2);
+auth.SetTimestampUs(m_pidTiUs);
+auth.SetQi(m_publicQi);      // Qi = xi * P
+auth.SetWi(wiBytes);
+auth.SetPsi(psiBytes);
+packet->AddHeader(auth);
+\end{lstlisting}
+
+The relay batches packets by the state \(\theta\), not by \(Q_i\):
+
+\begin{lstlisting}[style=cppstyle,caption={Relay batches by state theta and verifies with Qi.}]
+std::string batchKey(auth.GetState().begin(), auth.GetState().end());
+auto& batch = m_batches[batchKey];
+
+entry.stateBytes = auth.GetState();
+entry.pidBytes = pidBytes;
+entry.qiBytes = auth.GetQi();
+entry.wiBytes = auth.GetWi();
+entry.psiBytes = auth.GetPsi();
+
+verified = m_pbc.AggregatePsi(psiList, aggregatePsiBytes) &&
+           m_pbc.VerifyAggregate(pidList,
+                                 qiList,
+                                 wiList,
+                                 messageList,
+                                 batch.entries.front().stateBytes,
+                                 aggregatePsiBytes);
+\end{lstlisting}
+
+\subsection{Conclusion}
+
+\begin{itemize}[leftmargin=*]
+  \item \(Q_i\) is chosen by sampling \(x_i\in\mathbb{Z}_r\) and computing \(Q_i=x_iP\).
+  \item State information is \(\theta\), implemented as \codepath{m_stateInfo} and defaulting to \codepath{traffic-alert}.
+  \item The relay groups signatures by \(\theta\) because aggregate verification uses one common \(X=H_1(\theta)\) for the batch.
+  \item \(Q_i\) is sent separately in the PBC authentication header and is used in \(R_i\) and in the aggregate verification equation.
+\end{itemize}
+
+\section{Optional Strictness Improvement}
+
+For strict mathematical compliance with \(\mathbb{Z}_r^*\), the code can resample
+until a non-zero scalar is obtained. Conceptually:
+
+\begin{lstlisting}[style=cppstyle,caption={Optional strict non-zero scalar sampling pattern.}]
+element_init_Zr(m_s, m_pairing);
+do
+{
+  element_random(m_s);
+}
+while (element_is0(m_s));
+\end{lstlisting}
+
+The same pattern can be applied to \(t\), \(d_i\), \(x_i\), and \(w_i\). The
+current implementation is still practically safe because the probability of
+zero is approximately \(1/r\), but the resampling check makes it exactly match
+\(\mathbb{Z}_r^*\) notation.
+
+\end{document}

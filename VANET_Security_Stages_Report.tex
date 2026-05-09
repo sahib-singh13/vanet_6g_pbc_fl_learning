@@ -1,0 +1,546 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{commentgreen}{RGB}{0,110,55}
+\definecolor{keywordblue}{RGB}{0,70,150}
+\definecolor{stringred}{RGB}{150,35,35}
+
+\lstdefinestyle{cppstyle}{
+  language=C++,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{keywordblue}\bfseries,
+  commentstyle=\color{commentgreen},
+  stringstyle=\color{stringred},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  stepnumber=1,
+  numbersep=6pt,
+  breaklines=true,
+  breakatwhitespace=false,
+  tabsize=2,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  captionpos=b
+}
+
+\lstdefinestyle{cmdstyle}{
+  basicstyle=\ttfamily\scriptsize,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  breaklines=true,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  columns=fullflexible,
+  captionpos=b
+}
+
+\newcommand{\codepath}[1]{\path{#1}}
+
+\title{VANET Security Implementation Report}
+\author{VANET ns-3 Security Research Workspace}
+\date{April 29, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report summarizes the implemented VANET security flow in the ns-3
+\codepath{vanet-security} module. The focus is the five main security stages:
+system setup, pseudonym registration, KGC partial-key generation, vehicle
+signature generation, and relay-side aggregate verification. Each stage is
+documented with formulas and the exact source-code excerpts that implement it.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Implementation Scope}
+
+The implementation lives mainly in:
+
+\begin{longtable}{p{0.35\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{File} & \textbf{Role} \\
+\midrule
+\codepath{src/vanet-security/model/pbc-crypto.cc} & PBC setup, PID generation, partial key, signing, aggregation, verification. \\
+\codepath{src/vanet-security/model/ecc-crypto.cc} & ECDSA P-256 key generation, signing, verification, SHA-256 helper. \\
+\codepath{src/vanet-security/model/vehicle-app.cc} & Vehicle registration, credential storage, V2V signing. \\
+\codepath{src/vanet-security/model/ta-app.cc} & TA certificate signing and PID2 generation. \\
+\codepath{src/vanet-security/model/kgc-app.cc} & KGC key response and partial private key issue. \\
+\codepath{src/vanet-security/model/bs-app.cc} & BS orchestration between vehicle, RSU, TA, and KGC. \\
+\codepath{src/vanet-security/model/bs-relay-app.cc} & LTE/NR relay batching and aggregate verification. \\
+\codepath{scratch/vanet-security-lte.cc} & LTE scenario integration and \codepath{--securityMode}. \\
+\codepath{scratch/vanet-security-nr.cc} & NR/5G-LENA scenario integration and \codepath{--securityMode}. \\
+\bottomrule
+\end{longtable}
+
+\section{Security Modes}
+
+The LTE and NR scenarios support:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{PBC mode}: \codepath{--securityMode=pbc}. Enables PBC on TA, KGC, vehicles, and BS relay. The relay verifies V2V packets using aggregate pairing verification.
+  \item \textbf{ECC mode}: \codepath{--securityMode=ecc}. Disables PBC at runtime and keeps the ECDSA certificate/signature baseline.
+\end{itemize}
+
+\section{High-Level Message Flow}
+
+\begin{longtable}{p{0.20\linewidth}p{0.17\linewidth}p{0.17\linewidth}p{0.36\linewidth}}
+\toprule
+\textbf{Message} & \textbf{From} & \textbf{To} & \textbf{Purpose} \\
+\midrule
+\codepath{REGISTER_REQ} & Vehicle & RSU/BS & Vehicle requests credentials and sends PID1 in PBC mode. \\
+\codepath{KEY_REQ} & BS & KGC & BS asks KGC for ECDSA keys and optional PBC partial key. \\
+\codepath{KEY_RESP} & KGC & BS & KGC returns key material and optional \(S_i\). \\
+\codepath{CERT_REQ} & BS & TA & BS asks TA for certificate and PID2. \\
+\codepath{CERT_RESP} & TA & BS & TA returns certificate, PID2, and timestamp \(T_i\). \\
+\codepath{REGISTER_RESP} & BS/RSU & Vehicle & Vehicle receives ECC and PBC credentials. \\
+\codepath{V2V_PBC_DATA} & Vehicle & BS relay & PBC-authenticated V2V message for relay verification. \\
+\bottomrule
+\end{longtable}
+
+\section{Notation}
+
+\begin{longtable}{p{0.18\linewidth}p{0.72\linewidth}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} \\
+\midrule
+\(G_1\) & Additive elliptic-curve group used by PBC. \\
+\(G_T\) & Multiplicative target group of the pairing. \\
+\(P\) & Generator of \(G_1\). \\
+\(e(\cdot,\cdot)\) & Bilinear pairing \(G_1\times G_1\rightarrow G_T\). \\
+\(s\) & KGC master secret. \\
+\(P_{pub}=sP\) & KGC public key. \\
+\(t\) & TA master secret. \\
+\(T_{pub}=tP\) & TA public key. \\
+\(\mathrm{PID}_i\) & Vehicle pseudonym tuple \((\mathrm{PID1}_i,\mathrm{PID2}_i,T_i)\). \\
+\(S_i\) & KGC-issued partial private key for vehicle \(i\). \\
+\(x_i,Q_i\) & Vehicle secret/public verification key, \(Q_i=x_iP\). \\
+\(w_i,W_i\) & Per-message random scalar/point, \(W_i=w_iP\). \\
+\(\theta\) & Shared state string, default \codepath{traffic-alert}. \\
+\(\psi_i\) & PBC signature component. \\
+\bottomrule
+\end{longtable}
+
+\section{Stage 1: System Setup}
+
+\subsection{Goal}
+
+The TA and KGC initialize the pairing system and publish the public parameters
+needed by registration, signing, and verification.
+
+\subsection{Formulas}
+
+\[
+s\xleftarrow{\$}\mathbb{Z}_r,\qquad P_{pub}=sP
+\]
+
+\[
+t\xleftarrow{\$}\mathbb{Z}_r,\qquad T_{pub}=tP
+\]
+
+\[
+\theta=\text{traffic-alert}
+\]
+
+\subsection{Implementation}
+
+\begin{itemize}[leftmargin=*]
+  \item \codepath{PbcCrypto::SetupKgc()} creates \(P\), samples \(s\), and computes \(P_{pub}=sP\).
+  \item \codepath{PbcCrypto::SetupTa()} samples \(t\) and computes \(T_{pub}=tP\).
+  \item LTE/NR scenario code enables or disables PBC using \codepath{--securityMode=pbc|ecc}.
+  \item In PBC mode, the scenario injects KGC \(P_{pub}\) into the BS relay so the relay can verify aggregate signatures.
+\end{itemize}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=70,
+  lastline=143,
+  caption={Stage 1 code: PBC setup for KGC and TA.},
+  label={lst:stage1-pbc-setup}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/pbc-crypto.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=211,
+  lastline=252,
+  caption={Stage 1 code: LTE runtime security-mode switch.},
+  label={lst:stage1-lte-mode}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/scratch/vanet-security-lte.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=442,
+  lastline=504,
+  caption={Stage 1 code: LTE installs PBC-enabled apps and injects Ppub.},
+  label={lst:stage1-lte-enable}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/scratch/vanet-security-lte.cc}
+
+\section{Stage 2: Vehicle Registration and Pseudonym Generation}
+
+\subsection{Goal}
+
+The vehicle obtains an active pseudonym. This pseudonym is later used in the
+PBC signing equation instead of relying directly on the plain node ID.
+
+\subsection{Formulas}
+
+The vehicle creates:
+
+\[
+d_i\xleftarrow{\$}\mathbb{Z}_r,\qquad \mathrm{PID1}_i=d_iP
+\]
+
+The TA computes:
+
+\[
+q_i=t\cdot \mathrm{PID1}_i
+\]
+
+\[
+h_i=\operatorname{SHA256}(q_i\parallel T_{pub})
+\]
+
+\[
+\mathrm{PID2}_i=\operatorname{IDBytes}_i\oplus h_i[0..3]
+\]
+
+The active pseudonym is:
+
+\[
+\mathrm{PID}_i=(\mathrm{PID1}_i,\mathrm{PID2}_i,T_i)
+\]
+
+\subsection{Implementation}
+
+\begin{itemize}[leftmargin=*]
+  \item \codepath{VehicleApp::SendRegisterRequest()} sends the vehicle ID and PID1.
+  \item \codepath{PbcCrypto::GeneratePid1()} implements \(\mathrm{PID1}_i=d_iP\).
+  \item \codepath{TaApp::HandleCertReq()} signs the ECC certificate and asks PBC code to compute PID2.
+  \item \codepath{PbcCrypto::ComputePid2()} implements the TA-side PID2 formula.
+\end{itemize}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=115,
+  lastline=217,
+  caption={Stage 2 code: vehicle sends registration request with PID1.},
+  label={lst:stage2-register}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/vehicle-app.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=158,
+  lastline=260,
+  caption={Stage 2 code: PID1 and PID2 generation.},
+  label={lst:stage2-pid}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/pbc-crypto.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=153,
+  lastline=246,
+  caption={Stage 2 code: TA returns certificate, PID2, and timestamp.},
+  label={lst:stage2-ta}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/ta-app.cc}
+
+\section{Stage 3: KGC Partial Private Key Generation}
+
+\subsection{Goal}
+
+The KGC creates the partial private key \(S_i\), binding the active vehicle
+pseudonym to the KGC master secret \(s\).
+
+\subsection{Formulas}
+
+Encode the active pseudonym:
+
+\[
+\operatorname{PIDBytes}_i=
+\operatorname{len}(\mathrm{PID1}_i)\parallel \mathrm{PID1}_i
+\parallel \operatorname{len}(\mathrm{PID2}_i)\parallel \mathrm{PID2}_i
+\parallel T_i
+\]
+
+Hash the pseudonym to \(G_1\):
+
+\[
+\Pi_i=H_1(\operatorname{PIDBytes}_i\parallel P_{pub})
+\]
+
+Compute the partial key:
+
+\[
+S_i=s\Pi_i
+\]
+
+Freshness check:
+
+\[
+0\le T_r-T_i\le \Delta_{\text{fresh}}
+\]
+
+\subsection{Implementation}
+
+\begin{itemize}[leftmargin=*]
+  \item \codepath{BsApp} sends PID1, PID2, and timestamp to KGC after TA data is available.
+  \item \codepath{KgcApp::HandleKeyReq()} checks timestamp freshness before issuing \(S_i\).
+  \item \codepath{PbcCrypto::EncodePid()} builds the exact byte representation of \(\mathrm{PID}_i\).
+  \item \codepath{PbcCrypto::ComputePartialKey()} computes \(S_i=s\Pi_i\).
+\end{itemize}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=121,
+  lastline=228,
+  caption={Stage 3 code: KGC handles key request and partial-key issue.},
+  label={lst:stage3-kgc}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/kgc-app.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=276,
+  lastline=361,
+  caption={Stage 3 code: PID encoding and partial-key calculation.},
+  label={lst:stage3-partial}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/pbc-crypto.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=164,
+  lastline=303,
+  caption={Stage 3 code: BS requests and stores KGC response material.},
+  label={lst:stage3-bs}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/bs-app.cc}
+
+\section{Stage 4: Vehicle Full Key and Signature Generation}
+
+\subsection{Goal}
+
+The vehicle uses \(S_i\), its own secret \(x_i\), and fresh randomness \(w_i\)
+to sign a V2V alert message.
+
+\subsection{Formulas}
+
+Vehicle full-key component:
+
+\[
+x_i\xleftarrow{\$}\mathbb{Z}_r,\qquad Q_i=x_iP
+\]
+
+Per-message random point:
+
+\[
+w_i\xleftarrow{\$}\mathbb{Z}_r,\qquad W_i=w_iP
+\]
+
+State and message hashes:
+
+\[
+X=H_1(\theta)
+\]
+
+\[
+R_i=H_1(\theta\parallel M_i\parallel \operatorname{PIDBytes}_i\parallel Q_i\parallel W_i)
+\]
+
+Signature:
+
+\[
+\psi_i=S_i+x_iX+w_iR_i
+\]
+
+Transmitted PBC authentication tuple:
+
+\[
+\sigma_i=(\mathrm{PID1}_i,\mathrm{PID2}_i,T_i,Q_i,W_i,\psi_i,\theta)
+\]
+
+\subsection{Implementation}
+
+\begin{itemize}[leftmargin=*]
+  \item \codepath{VehicleApp::HandleRsuRead()} stores PID2, \(T_i\), \(S_i\), and generates \(Q_i=x_iP\).
+  \item \codepath{PbcCrypto::SignMessage()} computes \(W_i\), \(X\), \(R_i\), and \(\psi_i\).
+  \item \codepath{VehicleApp::SendV2vMessage()} selects PBC signing only when PBC and BS relay are enabled.
+\end{itemize}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=248,
+  lastline=356,
+  caption={Stage 4 code: vehicle stores PBC credentials and generates Qi.},
+  label={lst:stage4-creds}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/vehicle-app.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=410,
+  lastline=518,
+  caption={Stage 4 code: PBC signature generation.},
+  label={lst:stage4-sign}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/pbc-crypto.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=520,
+  lastline=612,
+  caption={Stage 4 code: vehicle sends PBC or ECC V2V packet.},
+  label={lst:stage4-send}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/vehicle-app.cc}
+
+\section{Stage 5: Relay Aggregation and Batch Verification}
+
+\subsection{Goal}
+
+The BS relay verifies a batch of PBC signatures before forwarding V2V packets.
+This is the verification authority in LTE/NR relay mode.
+
+\subsection{Formulas}
+
+Aggregate signatures:
+
+\[
+\Psi=\sum_{i=1}^{n}\psi_i
+\]
+
+Aggregate pseudonym hashes:
+
+\[
+\sum\Pi=\sum_{i=1}^{n}H_1(\operatorname{PIDBytes}_i\parallel P_{pub})
+\]
+
+Aggregate public keys:
+
+\[
+\sum Q=\sum_{i=1}^{n}Q_i
+\]
+
+Accept batch if:
+
+\[
+e(\Psi,P)\stackrel{?}{=}
+e(P_{pub},\sum\Pi)\cdot e(X,\sum Q)\cdot
+\prod_{i=1}^{n} e(R_i,W_i)
+\]
+
+\subsection{Short Derivation}
+
+From the signature formula:
+
+\[
+\psi_i=S_i+x_iX+w_iR_i
+\]
+
+Summing over all \(i\):
+
+\[
+\Psi=\sum_iS_i+\sum_ix_iX+\sum_iw_iR_i
+\]
+
+Using bilinearity and the definitions \(S_i=s\Pi_i\), \(P_{pub}=sP\),
+\(Q_i=x_iP\), and \(W_i=w_iP\):
+
+\[
+e(\Psi,P)=e(P_{pub},\sum_i\Pi_i)\cdot e(X,\sum_iQ_i)\cdot\prod_i e(R_i,W_i)
+\]
+
+\subsection{Implementation}
+
+\begin{itemize}[leftmargin=*]
+  \item \codepath{BsRelayApp::HandleRead()} validates PBC fields and builds batches.
+  \item \codepath{BsRelayApp::FlushBatch()} aggregates and verifies a batch.
+  \item \codepath{PbcCrypto::AggregatePsi()} computes \(\Psi\).
+  \item \codepath{PbcCrypto::VerifyAggregate()} implements the pairing equation.
+\end{itemize}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=138,
+  lastline=231,
+  caption={Stage 5 code: relay validates packets and builds batches.},
+  label={lst:stage5-batch}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/bs-relay-app.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=257,
+  lastline=320,
+  caption={Stage 5 code: relay flushes and verifies a batch.},
+  label={lst:stage5-flush}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/bs-relay-app.cc}
+
+\lstinputlisting[
+  style=cppstyle,
+  firstline=530,
+  lastline=705,
+  caption={Stage 5 code: aggregate signature verification equation.},
+  label={lst:stage5-verify}
+]{simulation_workspace/ns-allinone-3.44/ns-3.44/src/vanet-security/model/pbc-crypto.cc}
+
+\section{Evidence and Demo Checks}
+
+For a clean LTE PBC smoke run, the logs and CSV should show:
+
+\begin{lstlisting}[style=cmdstyle,caption={Useful professor-demo checks.}]
+grep -c "TA PBC setup complete" /tmp/lte_pbc.log
+grep -c "KGC PBC setup complete" /tmp/lte_pbc.log
+grep -c "stored PID2" /tmp/lte_pbc.log
+grep -c "stored partial key" /tmp/lte_pbc.log
+grep -c "generated Qi" /tmp/lte_pbc.log
+grep -c "missing active PBC signing material" /tmp/lte_pbc.log
+awk -F, 'NR==2{print "verification_failures=" $4, "avg_kgc_rtt_ms=" $10, "avg_ta_rtt_ms=" $11}' results/lte_pbc.csv
+\end{lstlisting}
+
+Expected result for the successful smoke test:
+
+\begin{itemize}[leftmargin=*]
+  \item PBC setup messages appear at least once.
+  \item Every registered vehicle stores PID2 and partial key.
+  \item Every registered vehicle generates \(Q_i\).
+  \item Missing active PBC signing material count is zero after registration completes.
+  \item \codepath{verification_failures=0} in the CSV for a clean run.
+\end{itemize}
+
+\section{Important Limitations}
+
+\begin{itemize}[leftmargin=*]
+  \item PBC is implemented for the LTE/NR BS-relay path.
+  \item Direct Wi-Fi/SUMO V2V remains on the ECC signing and verification path.
+  \item ECC uses OpenSSL P-256. PBC uses the installed PBC library's Type A pairing parameters, not NIST P-256.
+  \item Vehicles trust relay-forwarded PBC packets because the relay has already performed aggregate verification.
+  \item Credential transport is simulation-level and is not protected by TLS.
+\end{itemize}
+
+\section{Compile Command}
+
+Compile from the repository root so all listing paths resolve:
+
+\begin{lstlisting}[style=cmdstyle,caption={Build this report locally.}]
+pdflatex VANET_Security_Stages_Report.tex
+pdflatex VANET_Security_Stages_Report.tex
+\end{lstlisting}
+
+\end{document}

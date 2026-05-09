@@ -1,0 +1,312 @@
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\newcommand{\codepath}[1]{\path{#1}}
+\newcommand{\na}{\textsc{NA}}
+
+\lstdefinestyle{cmdstyle}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\title{LTE VANET 150-Second Comparison Report: ECC, PBC, and PBC with Federated Learning}
+\author{VANET ns-3 Security Research Workspace}
+\date{May 3, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report compares three LTE VANET simulation cases over the same 150-second
+run window: normal ECC authentication, PBC authentication, and PBC authentication
+with federated learning (FL). The goal is to quantify how the stronger PBC
+security model and the added FL workflow affect latency, energy, average power,
+communication overhead, and authentication behavior. The results show that ECC
+has the lowest total energy and lowest cryptographic latency. PBC significantly
+increases security energy and verification latency because pairing-based
+aggregate verification is expensive. Adding FL on top of PBC adds a small direct
+FL-only communication/computation cost, while the total PBC+FL run shows higher
+security energy than PBC alone. In the completed FL round, 10 out of 10
+participant updates were authenticated successfully.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Experiment Scope}
+
+The three cases are:
+
+\begin{longtable}{p{0.22\linewidth}p{0.68\linewidth}}
+\toprule
+\textbf{Case} & \textbf{Description} \\
+\midrule
+LTE ECC & Baseline LTE VANET using ECC/ECDSA authentication. Vehicles receive ECC credentials, sign messages, and receivers verify ECC signatures. \\
+LTE PBC & LTE VANET using PBC security. Vehicles receive PBC pseudonym/key material, sign relay-mode packets, and the relay performs aggregate verification. \\
+LTE PBC + FL & LTE PBC security with federated learning enabled. Vehicles receive a global model, compute local updates, sign FL updates, RSUs verify/aggregate updates, and the BS performs global aggregation. \\
+\bottomrule
+\end{longtable}
+
+All three cases were run for the same requested simulation duration:
+\[
+T_{sim}=150\text{ s}.
+\]
+The final periodic CSV row is at simulation time 149 s, which is expected because
+the logger writes rows once per simulated second before the simulator ends.
+
+\section{Commands Used}
+
+\begin{lstlisting}[style=cmdstyle,caption={Workspace and build command.}]
+cd /home/sahib/vanet_ns3_security_research/simulation_workspace/ns-allinone-3.44/ns-3.44
+mkdir -p results/lte_3case_150
+./ns3 build vanet-security-lte vanet-security-nr
+\end{lstlisting}
+
+\begin{lstlisting}[style=cmdstyle,caption={LTE ECC run.}]
+LSAN_OPTIONS=detect_leaks=0 ./ns3 run "vanet-security-lte --securityMode=ecc --networkLabel=5g_lte_ecc --effectiveRateMbps=100 --simTime=150 --progressLog=true --outCsv=results/lte_3case_150/lte_ecc_power.csv --stageCsv=results/lte_3case_150/lte_ecc_stages.csv"
+\end{lstlisting}
+
+\begin{lstlisting}[style=cmdstyle,caption={LTE PBC run.}]
+LSAN_OPTIONS=detect_leaks=0 ./ns3 run "vanet-security-lte --securityMode=pbc --networkLabel=5g_lte_pbc --effectiveRateMbps=100 --simTime=150 --progressLog=true --outCsv=results/lte_3case_150/lte_pbc_power.csv --stageCsv=results/lte_3case_150/lte_pbc_stages.csv"
+\end{lstlisting}
+
+\begin{lstlisting}[style=cmdstyle,caption={LTE PBC + federated learning run.}]
+LSAN_OPTIONS=detect_leaks=0 ./ns3 run "vanet-security-lte --securityMode=pbc --networkLabel=5g_lte_pbc_fl --effectiveRateMbps=100 --enableFl=true --flSecurityMode=pbc --flRounds=3 --flParticipants=10 --flModelDim=16 --simTime=150 --progressLog=true --outCsv=results/lte_3case_150/lte_pbc_fl_power.csv --stageCsv=results/lte_3case_150/lte_pbc_fl_stages.csv --flCsv=results/lte_3case_150/lte_pbc_fl_rounds.csv --flStageCsv=results/lte_3case_150/lte_pbc_fl_stage_summary.csv"
+\end{lstlisting}
+
+\section{Main Power and Latency Results}
+
+\begin{longtable}{p{0.18\linewidth}rrrrrr}
+\toprule
+\textbf{Case} & \textbf{Failures} & \textbf{Security J} & \textbf{Comm J} & \textbf{Total J} & \textbf{Avg Power W} & \textbf{V2V ms} \\
+\midrule
+LTE ECC & 0 & 59.437 & 19.511 & 78.947 & 0.530 & 849.767 \\
+LTE PBC & 156 & 383.359 & 5.928 & 389.288 & 2.613 & 2204.380 \\
+LTE PBC + FL & 156 & 413.805 & 5.935 & 419.741 & 2.817 & 2197.090 \\
+\bottomrule
+\end{longtable}
+
+\begin{longtable}{p{0.20\linewidth}rrrrrr}
+\toprule
+\textbf{Case} & \textbf{V2I Up ms} & \textbf{V2I Down ms} & \textbf{V2I RTT ms} & \textbf{Reg ms} & \textbf{Sign ms} & \textbf{Verify ms} \\
+\midrule
+LTE ECC & 33.855 & 812.608 & 846.599 & 280.780 & 1.551 & 1.594 \\
+LTE PBC & 32.938 & 524.476 & 556.106 & 495.800 & 27.458 & 111.197 \\
+LTE PBC + FL & 32.674 & 522.515 & 554.148 & 495.800 & 25.816 & 120.773 \\
+\bottomrule
+\end{longtable}
+
+\section{Stage-Level Summary}
+
+\begin{longtable}{p{0.20\linewidth}rrrrrr}
+\toprule
+\textbf{Case} & \textbf{Security J} & \textbf{Security ms} & \textbf{Comm J} & \textbf{Comm ms} & \textbf{FL-only J} & \textbf{FL events} \\
+\midrule
+LTE ECC & 59.789 & 23384.777 & 19.636 & 20944.672 & 0.000000 & 0 \\
+LTE PBC & 383.359 & 26319.416 & 5.929 & 6223.433 & 0.000000 & 0 \\
+LTE PBC + FL & 413.805 & 28778.050 & 5.936 & 6226.308 & 0.007113 & 134 \\
+\bottomrule
+\end{longtable}
+
+\section{Increment Analysis}
+
+\subsection{PBC Compared with ECC}
+
+\begin{longtable}{p{0.42\linewidth}rr}
+\toprule
+\textbf{Metric} & \textbf{Absolute change} & \textbf{Percent change} \\
+\midrule
+Security energy & 323.922 J & 544.99\% \\
+Communication energy & -13.582 J & -69.61\% \\
+Total energy & 310.341 J & 393.10\% \\
+Average total power & 2.083 W & 393.10\% \\
+Average V2V delay & 1354.613 ms & 159.41\% \\
+Average V2I RTT & -290.493 ms & -34.31\% \\
+Registration delay & 215.020 ms & 76.58\% \\
+Signing latency & 25.907 ms & 1670.51\% \\
+Verification latency & 109.603 ms & 6877.64\% \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} PBC is much heavier than ECC in this run. Total energy
+increased by 310.341 J, and average total
+power increased by 2.083 W. The main reason is
+cryptographic cost: average signing latency rose from 1.551 ms to
+27.458 ms, and average verification latency rose from
+1.594 ms to 111.197 ms. The PBC
+registration path is also heavier, with registration delay increasing from
+280.780 ms to 495.800 ms.
+
+\subsection{PBC + FL Compared with PBC}
+
+\begin{longtable}{p{0.42\linewidth}rr}
+\toprule
+\textbf{Metric} & \textbf{Absolute change} & \textbf{Percent change} \\
+\midrule
+Security energy & 30.446 J & 7.94\% \\
+Communication energy & 0.006670 J & 0.11\% \\
+Total energy & 30.453 J & 7.82\% \\
+Average total power & 0.204 W & 7.82\% \\
+Average V2V delay & -7.290 ms & -0.33\% \\
+Average V2I RTT & -1.958 ms & -0.35\% \\
+Signing latency & -1.642 ms & -5.98\% \\
+Aggregate latency & 0.017 ms & 9.13\% \\
+Verification latency & 9.576 ms & 8.61\% \\
+Partial-key latency & 2.191 ms & 41.07\% \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} Adding FL on top of PBC increased total energy by
+30.453 J, or 7.82\%.
+The direct communication-energy increase was very small: only
+0.006670 J. Stage-level FL-only overhead was
+0.007113 J across 134
+FL-specific events, with 2.985927 ms of FL-only latency.
+This means the FL traffic itself is visible but small compared with the PBC
+verification workload.
+
+\section{Federated Learning Authentication Result}
+
+The FL-enabled case completed one global FL round. The round-level output was:
+
+\begin{longtable}{p{0.42\linewidth}p{0.40\linewidth}}
+\toprule
+\textbf{FL metric} & \textbf{Value} \\
+\midrule
+Round completed & 0 \\
+Completion time & 10.402010 s \\
+Selected vehicles & 10 \\
+RSU count & 2 \\
+Updates sent & 10 \\
+Updates verified & 10 \\
+Updates rejected & 0 \\
+Authentication success rate & 100\% \\
+Model download bytes & 1632 \\
+Update upload bytes & 1440 \\
+Average FL update signing latency & 22.221816 ms \\
+Average FL update verification latency & 115.972422 ms \\
+\bottomrule
+\end{longtable}
+
+\section{Vehicle Credential and Authentication Counts}
+
+The following table separates three ideas that are easy to confuse: total
+vehicles that received credentials, vehicles that generated PBC full-key
+material, and vehicles selected for the completed FL training round.
+
+\begin{longtable}{p{0.25\linewidth}p{0.28\linewidth}p{0.35\linewidth}}
+\toprule
+\textbf{Case} & \textbf{Observed count} & \textbf{Meaning} \\
+\midrule
+LTE ECC & \codepath{vehicle:register_resp}=50 & 50 vehicles received ECC registration responses. This means the baseline ECC credential-delivery path completed for 50 vehicles. \\
+LTE PBC & \codepath{vehicle:register_resp}=50 & 50 vehicles received PBC-mode registration responses through the vehicle registration path. \\
+LTE PBC & \codepath{pbc_full_key}=50 & 50 vehicles generated PBC full-key material after receiving PBC credentials. \\
+LTE PBC + FL & \codepath{vehicle:register_resp}=50 & 50 normal VANET vehicles received PBC-mode registration responses. \\
+LTE PBC + FL & \codepath{pbc_full_key}=60 & 60 PBC full-key generation events were recorded. This is not 60 unique VANET cars; it includes the normal 50 VANET vehicle credential events plus the additional FL participant/security app credential events. \\
+LTE PBC + FL & \codepath{selected_vehicles}=10 & 10 vehicles were selected to participate in the completed FL round. \\
+LTE PBC + FL & \codepath{updates_verified}=10 & All 10 submitted FL updates were authenticated successfully. \\
+LTE PBC + FL & \codepath{updates_rejected}=0 & No FL update was rejected. \\
+\bottomrule
+\end{longtable}
+
+\textbf{Result.} The completed FL round authenticated 10 out of 10 participating
+vehicle updates:
+\[
+\text{FL authentication success rate}=\frac{10}{10}\times100=100\%.
+\]
+
+\textbf{Important distinction.} The FL update authentication result is clean:
+10 out of 10 FL updates were verified and 0 were rejected. However, the periodic
+VANET-wide metric \codepath{verification_failures} is 156 for both PBC and
+PBC+FL. Because the value is identical in PBC and PBC+FL, FL did not add extra
+VANET-wide verification failures in this run. These 156 failures belong to the
+broader PBC VANET relay/verification workload, not to rejected FL updates.
+
+\section{Meaning of the 156 Verification Failures}
+
+The value \codepath{verification_failures=156} does \emph{not} mean that 156
+vehicles failed authentication. It is a cumulative packet/event counter. In the
+implementation, \codepath{VanetStats::RecordVerificationFailure()} increments
+one global counter whenever a security verification guard fails during packet
+processing. In PBC relay mode, this can happen when a packet has invalid or
+missing PBC authentication fields, a PID timestamp is outside the accepted
+freshness window, PID encoding fails, an aggregate batch fails pairing
+verification, or a vehicle receives a PBC packet from a non-trusted relay path.
+
+For the PBC relay, one failed aggregate batch can add more than one failure,
+because the relay records one failure for each packet entry in the rejected
+batch. Therefore, the value 156 should be read as:
+
+\begin{quote}
+156 packet-level or batch-entry verification failure events occurred during the
+150-second PBC VANET message-propagation workload.
+\end{quote}
+
+It should \textbf{not} be read as:
+
+\begin{quote}
+156 vehicles failed to register, or 156 FL updates were rejected.
+\end{quote}
+
+The evidence is:
+
+\begin{itemize}
+  \item LTE PBC and LTE PBC+FL both have \codepath{verification_failures}=156.
+  \item The FL round has \codepath{updates_sent}=10, \codepath{updates_verified}=10, and \codepath{updates_rejected}=0.
+  \item Therefore, the FL layer did not add new rejected updates in this run.
+  \item The counter is coming from the broader PBC VANET relay/verification workload, not from the completed FL update-authentication path.
+\end{itemize}
+
+\section{Main Findings}
+
+\begin{itemize}
+  \item \textbf{ECC is the lowest-power baseline.} LTE ECC consumed 78.947 J total energy and 0.530 W average total power.
+  \item \textbf{PBC costs more than ECC.} LTE PBC consumed 389.288 J, which is 310.341 J higher than ECC.
+  \item \textbf{PBC verification is the dominant security bottleneck.} PBC average verification latency was 111.197 ms, compared with 1.594 ms for ECC.
+  \item \textbf{Adding FL to PBC increased total energy moderately.} LTE PBC+FL consumed 419.741 J, which is 30.453 J higher than PBC alone.
+  \item \textbf{Direct FL communication overhead is small.} FL-only stage energy is 0.007113 J and FL-only latency is 2.985927 ms.
+  \item \textbf{FL authentication succeeded.} In the completed FL round, 10 out of 10 vehicle updates were verified successfully.
+\end{itemize}
+
+\section{Conclusion}
+
+The 150-second LTE comparison shows a clear progression of cost. ECC is the most
+lightweight authentication mode. PBC introduces substantially higher security
+energy and latency, especially during aggregate verification, but it provides the
+pairing-based authenticated relay model required by the project. Adding FL on
+top of PBC adds measurable but comparatively small direct FL communication and
+computation overhead. The total PBC+FL energy is higher than PBC alone, but the
+FL-specific stage overhead is small in the current ns-3 implementation because
+local training is represented by a lightweight synthetic vector update. For a
+future experiment that highlights training delay more strongly, the simulator
+should add a configurable training-time parameter or import measured training
+latency from the Python FL baseline.
+
+\section{Files Used}
+
+\begin{itemize}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/lte_3case_150/lte_3case_power_latency_summary.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/lte_3case_150/lte_3case_stage_summary.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/lte_3case_150/lte_pbc_fl_rounds.csv}
+\end{itemize}
+
+\end{document}

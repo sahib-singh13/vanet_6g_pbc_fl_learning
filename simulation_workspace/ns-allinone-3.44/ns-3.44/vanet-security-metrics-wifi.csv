@@ -1,0 +1,7 @@
+time,infected_ratio,propagation_distance,verification_failures,avg_v2v_delay_ms,avg_v2i_uplink_ms,avg_v2i_downlink_ms,avg_v2i_rtt_ms
+1,0,0,0,0,0,0,0
+2,0,0,0,0,6.22632,0.352033,6.57803
+3,0,0,0,0,3.22453,0.341407,3.56541
+4,0,0,0,0,2.22393,0.337865,2.5612
+5,0,0,0,0,1.72364,0.336094,2.05909
+6,0,0,0,0,1.42346,0.335032,1.75783

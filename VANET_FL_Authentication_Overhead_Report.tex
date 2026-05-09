@@ -1,0 +1,314 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{220,220,220}
+\definecolor{darkblue}{RGB}{0,70,140}
+\definecolor{darkgreen}{RGB}{0,110,60}
+
+\lstdefinestyle{cmdstyle}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\newcommand{\codepath}[1]{\path{#1}}
+\newcommand{\pct}[1]{#1\%}
+\newcommand{\na}{\textsc{NA}}
+
+\title{Structured Report: Communication and Delay Overhead of Federated Learning with PBC Authentication in LTE VANET}
+\author{VANET ns-3 Security Research Workspace}
+\date{May 2, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report structures the experimental output comparing two LTE VANET security
+cases: a PBC authentication-only baseline and a PBC authentication plus
+federated learning (FL) run. The objective is to quantify whether adding FL
+introduces extra communication overhead, delay, power consumption, and
+security-stage latency. The experiment completed one FL global round with all
+selected vehicle updates authenticated successfully. The measured FL-only
+communication overhead was very small in this run: 0.006679 J and 2.8768 ms of
+analytical communication latency. The current ns-3 FL implementation uses a
+lightweight synthetic model-vector training stage, so the measured FL training
+compute time is also small; real ML training accuracy and heavier training cost
+remain in the Python baseline.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Purpose of the Comparison}
+
+The comparison answers the question:
+
+\begin{quote}
+How much extra communication overhead and delay are introduced when federated
+learning is enabled on top of the existing PBC-authenticated VANET model?
+\end{quote}
+
+Two cases were compared under the same LTE network label:
+
+\begin{longtable}{p{0.28\linewidth}p{0.62\linewidth}}
+\toprule
+\textbf{Case} & \textbf{Meaning} \\
+\midrule
+Authentication only & Vehicles use the existing PBC security model for VANET authentication, signing, aggregation, verification, and communication-energy accounting. FL is disabled. \\
+Authentication + FL & The same PBC security model is active, and federated learning is enabled. Vehicles receive a model, compute a local synthetic update, mask it, sign it, upload it to RSUs, RSUs verify and edge-aggregate updates, and the BS performs global aggregation. \\
+\bottomrule
+\end{longtable}
+
+The generated source result files are:
+
+\begin{itemize}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_comparison.md}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_comparison.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_auth_power.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_auth_fl_power.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_auth_stages.csv}
+  \item \codepath{simulation_workspace/ns-allinone-3.44/ns-3.44/results/fl_auth_compare/lte_pbc_auth_fl_stages.csv}
+\end{itemize}
+
+\section{Experiment Setup}
+
+The test was run from the ns-3 workspace with the LTE and NR security scenarios
+already built. The relevant comparison output shows that both LTE runs reached
+29 seconds of simulated progress, so the authentication-only and
+FL-enabled cases are comparable in simulation duration.
+
+\begin{lstlisting}[style=cmdstyle,caption={Command used to run the LTE FL/authentication overhead comparison.}]
+cd /home/sahib/vanet_ns3_security_research
+SIM_TIME=30 FL_ROUNDS=3 FL_PARTICIPANTS=10 FL_MODEL_DIM=16 ./scripts/run_fl_auth_overhead_compare.sh lte
+\end{lstlisting}
+
+Important parameters used in this comparison are summarized below.
+
+\begin{longtable}{p{0.33\linewidth}p{0.57\linewidth}}
+\toprule
+\textbf{Parameter} & \textbf{Value / Meaning} \\
+\midrule
+Network label & \codepath{5g_lte} \\
+Security mode & PBC authentication \\
+Simulation duration & 30 s requested; progress log reached 29 s before simulator stop \\
+FL enabled in second case & Yes \\
+FL rounds requested & 3 \\
+FL participants & 10 selected vehicles \\
+FL model dimension & 16 double-valued model weights \\
+FL architecture & Vehicles $\rightarrow$ RSUs $\rightarrow$ BS hierarchical aggregation \\
+FL training model in ns-3 & Lightweight synthetic vector-update simulation \\
+Real ML baseline & Kept separately in \codepath{Federated-Learning-VANET} \\
+\bottomrule
+\end{longtable}
+
+\section{Overhead Formula}
+
+For every metric, the report uses:
+
+\[
+\text{overhead}_{abs}=\text{value}_{auth+FL}-\text{value}_{auth-only}
+\]
+
+\[
+\text{overhead}_{\%}=100\times
+\frac{\text{value}_{auth+FL}-\text{value}_{auth-only}}
+{\text{value}_{auth-only}}
+\]
+
+Positive values mean that authentication plus FL is higher than authentication
+only. Negative values mean the FL-enabled run measured lower for that metric.
+Small negative values can happen because wall-clock cryptographic timing and
+packet events have run-to-run variation; they should not be interpreted as FL
+magically reducing cryptographic cost.
+
+\section{FL Completion and Authentication Success}
+
+The FL-enabled run completed one full global FL round.
+
+\begin{longtable}{p{0.42\linewidth}p{0.45\linewidth}}
+\toprule
+\textbf{Metric} & \textbf{Measured value} \\
+\midrule
+Completed FL rounds & 1 \\
+Last completed round index & 0 \\
+Completion simulation time & 10.402010 s \\
+Selected FL vehicles & 10 \\
+RSU count participating in FL & 2 \\
+Vehicle updates sent & 10 \\
+Vehicle updates verified & 10 \\
+Vehicle updates rejected & 0 \\
+Authentication success rate for FL updates & $10/10=100\%$ \\
+Model download bytes & 1632 bytes \\
+Update upload bytes & 1440 bytes \\
+Global loss proxy & 0.500000 \\
+Global accuracy proxy & 0.500000 \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} All 10 participating FL vehicles successfully submitted
+authenticated updates. No FL update was rejected. This means the PBC-secured FL
+message path worked for the completed round.
+
+\section{Communication Overhead Results}
+
+\begin{longtable}{p{0.32\linewidth}rrrr}
+\toprule
+\textbf{Metric} & \textbf{Auth only} & \textbf{Auth + FL} & \textbf{Overhead} & \textbf{Overhead \%} \\
+\midrule
+Communication energy (J) & 5.538350 & 5.545030 & 0.006680 & 0.120614 \\
+Average communication power (W) & 0.190978 & 0.191208 & 0.000230 & 0.120433 \\
+Total communication-stage energy (J) & 5.744753 & 5.743032 & -0.001721 & -0.029966 \\
+Total communication-stage latency (ms) & 6093.272800 & 6086.996160 & -6.276640 & -0.103009 \\
+FL-only communication energy (J) & 0.000000 & 0.006679 & 0.006679 & \na \\
+FL-only communication latency (ms) & 0.000000 & 2.876800 & 2.876800 & \na \\
+FL communication events & 0.000000 & 92.000000 & 92.000000 & \na \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} The direct periodic communication-energy metric
+increased from 5.538350 J to 5.545030 J, which is only 0.006680 J higher. This
+is a 0.120614\% increase, so the FL communication overhead is small compared
+with the existing VANET communication workload in this LTE run. The FL-specific
+communication rows show 92 FL communication events and 2.876800 ms of analytical
+airtime latency.
+
+The slight negative value in total communication-stage energy and latency is a
+measurement-level difference caused by event counts and run-to-run variation in
+the non-FL background traffic. The most direct FL communication overhead is the
+FL-only row: 0.006679 J and 2.876800 ms.
+
+\section{Network Delay Results}
+
+\begin{longtable}{p{0.34\linewidth}rrrr}
+\toprule
+\textbf{Metric} & \textbf{Auth only} & \textbf{Auth + FL} & \textbf{Overhead} & \textbf{Overhead \%} \\
+\midrule
+Average V2V delay (ms) & 1116.910000 & 1113.690000 & -3.220000 & -0.288295 \\
+Average V2I uplink delay (ms) & 19.641300 & 18.927000 & -0.714300 & -3.636725 \\
+Average V2I downlink delay (ms) & 1363.880000 & 1368.400000 & 4.520000 & 0.331407 \\
+Average V2I RTT (ms) & 1378.000000 & 1382.540000 & 4.540000 & 0.329463 \\
+Average registration delay (ms) & 495.800000 & 495.800000 & 0.000000 & 0.000000 \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} The main V2I RTT increased by 4.540 ms, which is only
+0.329463\%. V2I downlink delay increased by 4.520 ms, also about 0.33\%. V2V
+and uplink delay were slightly lower in the FL run, which is best interpreted
+as normal simulation/event variation rather than a true improvement caused by
+FL.
+
+The registration delay was unchanged at 495.800 ms. This is expected because FL
+starts after credentials are already available, so FL does not change the PBC
+registration path in this version.
+
+\section{Security and Power Results}
+
+\begin{longtable}{p{0.34\linewidth}rrrr}
+\toprule
+\textbf{Metric} & \textbf{Auth only} & \textbf{Auth + FL} & \textbf{Overhead} & \textbf{Overhead \%} \\
+\midrule
+Total energy (J) & 345.910000 & 312.334000 & -33.576000 & -9.706571 \\
+Average total power (W) & 11.927900 & 10.770200 & -1.157700 & -9.705816 \\
+Average signing latency (ms) & 25.793100 & 21.298700 & -4.494400 & -17.424815 \\
+Average verification latency (ms) & 106.041000 & 96.257900 & -9.783100 & -9.225771 \\
+PBC-stage energy (J) & 354.953512 & 318.368395 & -36.585117 & -10.307017 \\
+PBC-stage latency (ms) & 24387.827668 & 22199.734695 & -2188.092973 & -8.972070 \\
+\bottomrule
+\end{longtable}
+
+\textbf{Interpretation.} The FL-enabled run measured lower total security energy
+and PBC-stage latency than the authentication-only run. This should be treated
+carefully. The PBC signing and verification code is measured using wall-clock
+cryptographic timing, so values can vary between runs even when the simulation
+configuration is the same. The correct conclusion is not that FL reduces PBC
+cost. The correct conclusion is that, for this run, the added FL-specific
+computation and communication were small compared with the dominant PBC
+aggregate verification workload.
+
+\section{FL-Specific Computation Results}
+
+\begin{longtable}{p{0.34\linewidth}rrrr}
+\toprule
+\textbf{Metric} & \textbf{Auth only} & \textbf{Auth + FL} & \textbf{Overhead} & \textbf{Overhead \%} \\
+\midrule
+FL-only computation energy (J) & 0.000000 & 0.000392 & 0.000392 & \na \\
+FL-only computation latency (ms) & 0.000000 & 0.100141 & 0.100141 & \na \\
+FL computation events & 0.000000 & 42.000000 & 42.000000 & \na \\
+\bottomrule
+\end{longtable}
+
+The FL-specific computation stages include:
+
+\begin{itemize}
+  \item \codepath{fl_local_train}: synthetic local model update at vehicles.
+  \item \codepath{fl_mask_generate}: masking step before upload.
+  \item \codepath{fl_edge_aggregate}: RSU-side weighted aggregation.
+  \item \codepath{fl_global_aggregate}: BS-side global aggregation.
+\end{itemize}
+
+\textbf{Interpretation.} In this v1 ns-3 implementation, local FL training is
+intentionally lightweight. Therefore, FL-only computation overhead is very small:
+0.000392 J and 0.100141 ms. If the project needs to demonstrate heavier FL
+training delay, the next step should be to add a configurable simulated training
+delay, such as \codepath{--flLocalTrainDelayMs}, or to couple the ns-3 scenario
+with measured training profiles from the Python baseline.
+
+\section{Overall Conclusion}
+
+For this LTE PBC comparison, adding FL produced the following key outcomes:
+
+\begin{itemize}
+  \item FL authentication succeeded for all selected vehicles: 10 verified out of 10 submitted updates.
+  \item FL introduced a small direct communication overhead: 0.006679 J and 2.876800 ms.
+  \item Average communication power increased by only 0.120433\%.
+  \item V2I RTT increased by 4.540 ms, approximately 0.329463\%.
+  \item Registration delay did not change because FL starts after PBC credential setup.
+  \item Synthetic FL computation overhead was very small: 0.000392 J and 0.100141 ms.
+  \item PBC aggregate verification remains the dominant security cost, not FL aggregation itself.
+\end{itemize}
+
+Therefore, in the current implementation, the FL communication overhead is
+measurable but small relative to the existing PBC-authenticated VANET workload.
+The strongest evidence is the FL-only communication overhead and the
+successfully authenticated FL update count. For a more realistic ML-training
+latency study, the simulator should either inject a configurable training delay
+or import measured training-time profiles from the Python FL baseline.
+
+\section{Recommended Next Experiment}
+
+To show the effect of heavier FL training, run the same comparison with a larger
+model dimension and more rounds:
+
+\begin{lstlisting}[style=cmdstyle,caption={Recommended heavier FL comparison command.}]
+cd /home/sahib/vanet_ns3_security_research
+SIM_TIME=90 FL_ROUNDS=5 FL_PARTICIPANTS=20 FL_MODEL_DIM=64 ./scripts/run_fl_auth_overhead_compare.sh lte
+\end{lstlisting}
+
+If training delay should affect simulated network time directly, add a future
+scenario option such as:
+
+\begin{lstlisting}[style=cmdstyle,caption={Proposed future option for simulated FL training delay.}]
+--flLocalTrainDelayMs=50
+\end{lstlisting}
+
+This would make the FL training time visible not only in power/stage CSVs, but
+also in the simulated round completion time and end-to-end FL latency.
+
+\end{document}
