@@ -6,6 +6,47 @@ namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE("VanetMessage");
 
+namespace {
+
+bool
+ReadNtohU16Safe(Buffer::Iterator& start, uint16_t& value)
+{
+  if (start.GetRemainingSize() < 2)
+  {
+    return false;
+  }
+  value = start.ReadNtohU16();
+  return true;
+}
+
+bool
+ReadNtohU64Safe(Buffer::Iterator& start, uint64_t& value)
+{
+  if (start.GetRemainingSize() < 8)
+  {
+    return false;
+  }
+  value = start.ReadNtohU64();
+  return true;
+}
+
+bool
+ReadVectorSafe(Buffer::Iterator& start, uint16_t length, std::vector<uint8_t>& value)
+{
+  if (start.GetRemainingSize() < length)
+  {
+    return false;
+  }
+  value.resize(length);
+  for (uint16_t i = 0; i < length; ++i)
+  {
+    value[i] = start.ReadU8();
+  }
+  return true;
+}
+
+} // namespace
+
 VanetMessageHeader::VanetMessageHeader() = default;
 
 TypeId
@@ -116,6 +157,17 @@ VanetMessageHeader::Serialize(Buffer::Iterator start) const
 uint32_t
 VanetMessageHeader::Deserialize(Buffer::Iterator start)
 {
+  if (start.GetRemainingSize() < GetSerializedSize())
+  {
+    m_type = VanetMessageType::V2V_DATA;
+    m_senderId = 0;
+    m_targetId = 0;
+    m_messageId = 0;
+    m_timestampUs = 0;
+    m_payloadSize = 0;
+    return 0;
+  }
+
   m_type = static_cast<VanetMessageType>(start.ReadU8());
   m_senderId = start.ReadNtohU32();
   m_targetId = start.ReadNtohU32();
@@ -217,24 +269,27 @@ VanetAuthHeader::Serialize(Buffer::Iterator start) const
 uint32_t
 VanetAuthHeader::Deserialize(Buffer::Iterator start)
 {
-  uint16_t pubLen = start.ReadNtohU16();
-  uint16_t certLen = start.ReadNtohU16();
-  uint16_t sigLen = start.ReadNtohU16();
+  auto fail = [this]() -> uint32_t {
+    m_publicKey.clear();
+    m_certificate.clear();
+    m_signature.clear();
+    return 0;
+  };
 
-  m_publicKey.resize(pubLen);
-  for (uint16_t i = 0; i < pubLen; ++i)
+  uint16_t pubLen = 0;
+  uint16_t certLen = 0;
+  uint16_t sigLen = 0;
+  if (!ReadNtohU16Safe(start, pubLen) || !ReadNtohU16Safe(start, certLen) ||
+      !ReadNtohU16Safe(start, sigLen))
   {
-    m_publicKey[i] = start.ReadU8();
+    return fail();
   }
-  m_certificate.resize(certLen);
-  for (uint16_t i = 0; i < certLen; ++i)
+
+  if (!ReadVectorSafe(start, pubLen, m_publicKey) ||
+      !ReadVectorSafe(start, certLen, m_certificate) ||
+      !ReadVectorSafe(start, sigLen, m_signature))
   {
-    m_certificate[i] = start.ReadU8();
-  }
-  m_signature.resize(sigLen);
-  for (uint16_t i = 0; i < sigLen; ++i)
-  {
-    m_signature[i] = start.ReadU8();
+    return fail();
   }
 
   return GetSerializedSize();
@@ -395,48 +450,56 @@ VanetPbcAuthHeader::Serialize(Buffer::Iterator start) const
 uint32_t
 VanetPbcAuthHeader::Deserialize(Buffer::Iterator start)
 {
-  uint16_t stateLen = start.ReadNtohU16();
-  m_state.resize(stateLen);
-  for (uint16_t i = 0; i < stateLen; ++i)
+  auto fail = [this]() -> uint32_t {
+    m_state.clear();
+    m_pid1.clear();
+    m_pid2.clear();
+    m_tiUs = 0;
+    m_qi.clear();
+    m_wi.clear();
+    m_psi.clear();
+    return 0;
+  };
+
+  uint16_t stateLen = 0;
+  if (!ReadNtohU16Safe(start, stateLen) || !ReadVectorSafe(start, stateLen, m_state))
   {
-    m_state[i] = start.ReadU8();
+    return fail();
   }
 
-  uint16_t pid1Len = start.ReadNtohU16();
-  m_pid1.resize(pid1Len);
-  for (uint16_t i = 0; i < pid1Len; ++i)
+  uint16_t pid1Len = 0;
+  if (!ReadNtohU16Safe(start, pid1Len) || !ReadVectorSafe(start, pid1Len, m_pid1))
   {
-    m_pid1[i] = start.ReadU8();
+    return fail();
   }
 
-  uint16_t pid2Len = start.ReadNtohU16();
-  m_pid2.resize(pid2Len);
-  for (uint16_t i = 0; i < pid2Len; ++i)
+  uint16_t pid2Len = 0;
+  if (!ReadNtohU16Safe(start, pid2Len) || !ReadVectorSafe(start, pid2Len, m_pid2))
   {
-    m_pid2[i] = start.ReadU8();
+    return fail();
   }
 
-  m_tiUs = start.ReadNtohU64();
-
-  uint16_t qiLen = start.ReadNtohU16();
-  m_qi.resize(qiLen);
-  for (uint16_t i = 0; i < qiLen; ++i)
+  if (!ReadNtohU64Safe(start, m_tiUs))
   {
-    m_qi[i] = start.ReadU8();
+    return fail();
   }
 
-  uint16_t wiLen = start.ReadNtohU16();
-  m_wi.resize(wiLen);
-  for (uint16_t i = 0; i < wiLen; ++i)
+  uint16_t qiLen = 0;
+  if (!ReadNtohU16Safe(start, qiLen) || !ReadVectorSafe(start, qiLen, m_qi))
   {
-    m_wi[i] = start.ReadU8();
+    return fail();
   }
 
-  uint16_t psiLen = start.ReadNtohU16();
-  m_psi.resize(psiLen);
-  for (uint16_t i = 0; i < psiLen; ++i)
+  uint16_t wiLen = 0;
+  if (!ReadNtohU16Safe(start, wiLen) || !ReadVectorSafe(start, wiLen, m_wi))
   {
-    m_psi[i] = start.ReadU8();
+    return fail();
+  }
+
+  uint16_t psiLen = 0;
+  if (!ReadNtohU16Safe(start, psiLen) || !ReadVectorSafe(start, psiLen, m_psi))
+  {
+    return fail();
   }
   return GetSerializedSize();
 }
