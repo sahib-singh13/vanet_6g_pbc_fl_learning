@@ -250,6 +250,8 @@ BsRelayApp::ForwardPacket(Ptr<Packet> packet, Ipv4Address srcAddr)
       continue;
     }
     Ptr<Packet> copy = packet->Copy();
+    copy->RemoveAllPacketTags();
+    copy->RemoveAllByteTags();
     const uint64_t bytes = copy->GetSize();
     m_socket->SendTo(copy, 0, InetSocketAddress(dst, m_port));
     VanetPowerModel::RecordCommunication("v2v_relay_forward", "bs_relay", "vehicle", bytes);
