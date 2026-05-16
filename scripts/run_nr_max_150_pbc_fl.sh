@@ -14,6 +14,7 @@ FL_ROUND_INTERVAL="${FL_ROUND_INTERVAL:-1.0}"
 BASE_TRACE_PATH="${BASE_TRACE_PATH:-mobility_trace.tcl}"
 TRACE_PATH="${TRACE_PATH:-mobility_trace_${TARGET_VEHICLES}.tcl}"
 NS3_CONFIGURE_ARGS="${NS3_CONFIGURE_ARGS:---enable-examples --build-profile=optimized}"
+SCHEDULER_TYPE="${SCHEDULER_TYPE:-HeapScheduler}"
 PBC_CMAKE_ARG="-DVANET_SECURITY_ENABLE_PBC=ON"
 PBC_CMAKE_EXTRA_ARGS="${PBC_CMAKE_EXTRA_ARGS:-}"
 
@@ -35,7 +36,7 @@ run_case() {
 
   echo
   echo "Running ${case_name} for ${SIM_TIME} simulated seconds..."
-  ./ns3 run "vanet-security-nr --trace=${TRACE_PATH} --radioProfile=6g_nr_max --securityMode=pbc --simTime=${SIM_TIME} --progressLog=true ${extra_args} --outCsv=${power_csv} --stageCsv=${stage_csv}"
+  ./ns3 run "vanet-security-nr --SchedulerType=${SCHEDULER_TYPE} --trace=${TRACE_PATH} --radioProfile=6g_nr_max --securityMode=pbc --simTime=${SIM_TIME} --progressLog=true ${extra_args} --outCsv=${power_csv} --stageCsv=${stage_csv}"
 
   python3 "$REPO_ROOT/scripts/format_pbc_power_results.py" \
     --power-csv "$power_csv" \
@@ -52,6 +53,7 @@ write_index() {
     printf 'Base trace: `%s`\n\n' "$BASE_TRACE_PATH"
     printf 'Trace: `%s`\n\n' "$TRACE_PATH"
     printf 'Trace vehicle count: `%s`\n\n' "$vehicle_count"
+    printf 'Scheduler type: `%s`\n\n' "$SCHEDULER_TYPE"
     printf 'Radio profile: `6g_nr_max`\n\n'
     printf 'Security mode: `pbc`\n\n'
     printf 'FL settings: `%s` rounds, `%s` participants, model dimension `%s`, round interval `%s` seconds\n\n' "$FL_ROUNDS" "$FL_PARTICIPANTS" "$FL_MODEL_DIM" "$FL_ROUND_INTERVAL"
