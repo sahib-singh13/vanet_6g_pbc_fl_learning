@@ -287,7 +287,12 @@ FlVehicleApp::HandleRead(Ptr<Socket> socket)
   while (packet && packet->GetSize() > 0)
   {
     VanetMessageHeader header;
-    packet->RemoveHeader(header);
+    if (!TryRemoveVanetMessageHeader(packet, header) ||
+        header.GetPayloadSize() != packet->GetSize())
+    {
+      packet = socket->RecvFrom(from);
+      continue;
+    }
     if (header.GetType() == VanetMessageType::FL_MODEL_DOWNLOAD ||
         header.GetType() == VanetMessageType::FL_GLOBAL_MODEL ||
         header.GetType() == VanetMessageType::FL_ROUND_START)
@@ -606,7 +611,12 @@ FlRsuAggregatorApp::HandleRead(Ptr<Socket> socket)
     if (src == m_bsAddress)
     {
       VanetMessageHeader header;
-      packet->RemoveHeader(header);
+      if (!TryRemoveVanetMessageHeader(packet, header) ||
+          header.GetPayloadSize() != packet->GetSize())
+      {
+        packet = socket->RecvFrom(from);
+        continue;
+      }
       std::vector<uint8_t> payload(packet->GetSize());
       if (!payload.empty())
       {
@@ -646,6 +656,7 @@ FlRsuAggregatorApp::HandleModelDownload(const VanetMessageHeader& header,
   state.round = round;
   state.globalModel = globalModel;
   state.updates.clear();
+  state.seenVehicles.clear();
   state.rejected = 0;
 
   for (const Ipv4Address& vehicle : m_vehicleAddresses)
@@ -676,11 +687,17 @@ FlRsuAggregatorApp::HandleVehicleUpdate(Ptr<Packet> packet, const Address& from)
   {
 #ifdef VANET_SECURITY_USE_PBC
     VanetPbcAuthHeader auth;
-    inspect->RemoveHeader(auth);
-    VanetMessageHeader header;
-    inspect->RemoveHeader(header);
-    if (header.GetType() != VanetMessageType::FL_UPDATE_UPLOAD)
+    if (!TryRemoveVanetPbcAuthHeader(inspect, auth))
     {
+      VanetStats::RecordVerificationFailure();
+      return;
+    }
+    VanetMessageHeader header;
+    if (!TryRemoveVanetMessageHeader(inspect, header) ||
+        header.GetType() != VanetMessageType::FL_UPDATE_UPLOAD ||
+        header.GetPayloadSize() != inspect->GetSize())
+    {
+      VanetStats::RecordVerificationFailure();
       return;
     }
     std::vector<uint8_t> payload(inspect->GetSize());
@@ -715,6 +732,10 @@ FlRsuAggregatorApp::HandleVehicleUpdate(Ptr<Packet> packet, const Address& from)
     }
     RoundState& state = m_rounds[round];
     state.round = round;
+    if (!state.seenVehicles.insert(entry.vehicleId).second)
+    {
+      return;
+    }
     state.updates.push_back(std::move(entry));
     TryFlushRound(round);
 #endif
@@ -722,14 +743,20 @@ FlRsuAggregatorApp::HandleVehicleUpdate(Ptr<Packet> packet, const Address& from)
   else
   {
     VanetAuthHeader auth;
-    inspect->RemoveHeader(auth);
+    if (!TryRemoveVanetAuthHeader(inspect, auth))
+    {
+      VanetStats::RecordVerificationFailure();
+      return;
+    }
     std::vector<uint8_t> signData(inspect->GetSize());
     inspect->CopyData(signData.data(), signData.size());
 
     VanetMessageHeader header;
-    inspect->RemoveHeader(header);
-    if (header.GetType() != VanetMessageType::FL_UPDATE_UPLOAD)
+    if (!TryRemoveVanetMessageHeader(inspect, header) ||
+        header.GetType() != VanetMessageType::FL_UPDATE_UPLOAD ||
+        header.GetPayloadSize() != inspect->GetSize())
     {
+      VanetStats::RecordVerificationFailure();
       return;
     }
     std::vector<uint8_t> payload(inspect->GetSize());
@@ -760,6 +787,10 @@ FlRsuAggregatorApp::HandleVehicleUpdate(Ptr<Packet> packet, const Address& from)
     }
     RoundState& state = m_rounds[round];
     state.round = round;
+    if (!state.seenVehicles.insert(entry.vehicleId).second)
+    {
+      return;
+    }
     state.updates.push_back(std::move(entry));
     TryFlushRound(round);
   }
@@ -981,6 +1012,7 @@ FlBsAggregatorApp::StopApplication()
     m_csv.close();
   }
   m_roundAggregates.clear();
+  m_seenRsuAggregates.clear();
 }
 
 void
@@ -1020,7 +1052,12 @@ FlBsAggregatorApp::HandleRead(Ptr<Socket> socket)
   while (packet && packet->GetSize() > 0)
   {
     VanetMessageHeader header;
-    packet->RemoveHeader(header);
+    if (!TryRemoveVanetMessageHeader(packet, header) ||
+        header.GetPayloadSize() != packet->GetSize())
+    {
+      packet = socket->RecvFrom(from);
+      continue;
+    }
     if (header.GetType() == VanetMessageType::FL_RSU_AGGREGATE)
     {
       std::vector<uint8_t> payload(packet->GetSize());
@@ -1037,6 +1074,11 @@ FlBsAggregatorApp::HandleRead(Ptr<Socket> socket)
           ReadUint32(payload, offset, aggregate.datasetSize) &&
           ReadVector(payload, offset, aggregate.weights))
       {
+        if (!m_seenRsuAggregates[round].insert(aggregate.rsuId).second)
+        {
+          packet = socket->RecvFrom(from);
+          continue;
+        }
         m_roundAggregates[round].push_back(std::move(aggregate));
         if (m_roundAggregates[round].size() >= m_rsuAddresses.size())
         {
@@ -1058,6 +1100,7 @@ FlBsAggregatorApp::CompleteRound(uint32_t round)
   }
   const auto aggregates = std::move(it->second);
   m_roundAggregates.erase(it);
+  m_seenRsuAggregates.erase(round);
 
   uint32_t totalDataset = 0;
   uint32_t verified = 0;

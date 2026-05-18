@@ -19,6 +19,13 @@ namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE("VehicleApp");
 
+namespace {
+
+constexpr uint64_t kSeenRetentionUs = 120000000;
+constexpr size_t kMaxSeenMessages = 200000;
+
+} // namespace
+
 VehicleApp::VehicleApp() = default;
 VehicleApp::~VehicleApp() = default;
 
@@ -257,7 +264,12 @@ VehicleApp::HandleRsuRead(Ptr<Socket> socket)
   while (packet && packet->GetSize() > 0)
   {
     VanetMessageHeader header;
-    packet->RemoveHeader(header);
+    if (!TryRemoveVanetMessageHeader(packet, header) ||
+        header.GetPayloadSize() != packet->GetSize())
+    {
+      packet = socket->RecvFrom(from);
+      continue;
+    }
 
     if (header.GetType() == VanetMessageType::REGISTER_RESP)
     {
@@ -387,14 +399,13 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
   while (packet && packet->GetSize() > 0)
   {
     Ptr<Packet> forwardPacket = packet->Copy();
-    forwardPacket->RemoveAllPacketTags();
-    forwardPacket->RemoveAllByteTags();
+    StripPacketTags(forwardPacket);
 
     if (m_enablePbc && m_useBsRelay)
     {
+      Ptr<Packet> inspect = packet->Copy();
       VanetPbcAuthHeader auth;
-      packet->RemoveHeader(auth);
-      if (auth.GetPid1().empty() || auth.GetQi().empty() || auth.GetPsi().empty())
+      if (!TryRemoveVanetPbcAuthHeader(inspect, auth))
       {
         VanetStats::RecordVerificationFailure();
         packet = socket->RecvFrom(from);
@@ -402,9 +413,11 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
       }
 
       VanetMessageHeader header;
-      packet->RemoveHeader(header);
-      if (header.GetType() != VanetMessageType::V2V_PBC_DATA)
+      if (!TryRemoveVanetMessageHeader(inspect, header) ||
+          header.GetType() != VanetMessageType::V2V_PBC_DATA ||
+          header.GetPayloadSize() != inspect->GetSize())
       {
+        VanetStats::RecordVerificationFailure();
         packet = socket->RecvFrom(from);
         continue;
       }
@@ -427,9 +440,9 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
         continue;
       }
 
-      uint64_t msgKey =
-          (static_cast<uint64_t>(header.GetSenderId()) << 32) | header.GetMessageId();
-      if (m_seenMessages.find(msgKey) != m_seenMessages.end())
+      uint64_t msgKey = MakeVanetMessageKey(header.GetSenderId(), header.GetMessageId());
+      const uint64_t nowUs = static_cast<uint64_t>(Simulator::Now().GetMicroSeconds());
+      if (!MarkMessageSeen(msgKey, nowUs))
       {
         packet = socket->RecvFrom(from);
         continue;
@@ -439,7 +452,6 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
           Simulator::Now().GetSeconds() - (static_cast<double>(header.GetTimestampUs()) / 1e6);
       VanetStats::RecordV2vDelay(v2vDelay);
 
-      m_seenMessages.insert(msgKey);
       if (!m_infected)
       {
         MarkInfected();
@@ -451,14 +463,27 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
     }
     else
     {
+      Ptr<Packet> inspect = packet->Copy();
       VanetAuthHeader auth;
-      packet->RemoveHeader(auth);
+      if (!TryRemoveVanetAuthHeader(inspect, auth))
+      {
+        VanetStats::RecordVerificationFailure();
+        packet = socket->RecvFrom(from);
+        continue;
+      }
 
-      std::vector<uint8_t> signedData(packet->GetSize());
-      packet->CopyData(signedData.data(), signedData.size());
+      std::vector<uint8_t> signedData;
+      CopyPacketBytes(inspect, signedData);
 
       VanetMessageHeader header;
-      packet->RemoveHeader(header);
+      if (!TryRemoveVanetMessageHeader(inspect, header) ||
+          header.GetType() != VanetMessageType::V2V_DATA ||
+          header.GetPayloadSize() != inspect->GetSize())
+      {
+        VanetStats::RecordVerificationFailure();
+        packet = socket->RecvFrom(from);
+        continue;
+      }
 
       if (header.GetSenderId() == m_vehicleId)
       {
@@ -466,9 +491,9 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
         continue;
       }
 
-      uint64_t msgKey =
-          (static_cast<uint64_t>(header.GetSenderId()) << 32) | header.GetMessageId();
-      if (m_seenMessages.find(msgKey) != m_seenMessages.end())
+      uint64_t msgKey = MakeVanetMessageKey(header.GetSenderId(), header.GetMessageId());
+      const uint64_t nowUs = static_cast<uint64_t>(Simulator::Now().GetMicroSeconds());
+      if (!MarkMessageSeen(msgKey, nowUs))
       {
         packet = socket->RecvFrom(from);
         continue;
@@ -516,7 +541,6 @@ VehicleApp::HandleV2vRead(Ptr<Socket> socket)
           Simulator::Now().GetSeconds() - (static_cast<double>(header.GetTimestampUs()) / 1e6);
       VanetStats::RecordV2vDelay(v2vDelay);
 
-      m_seenMessages.insert(msgKey);
       if (!m_infected)
       {
         MarkInfected();
@@ -642,13 +666,13 @@ VehicleApp::Rebroadcast(Ptr<Packet> packet)
   {
     return;
   }
-  packet->RemoveAllPacketTags();
-  packet->RemoveAllByteTags();
+  Ptr<Packet> clean = packet->Copy();
+  StripPacketTags(clean);
   InetSocketAddress dest =
       m_useBsRelay ? InetSocketAddress(m_relayAddress, m_relayPort)
                    : InetSocketAddress(Ipv4Address("255.255.255.255"), m_v2vPort);
-  const uint64_t bytes = packet->GetSize();
-  m_v2vSocket->SendTo(packet, 0, dest);
+  const uint64_t bytes = clean->GetSize();
+  m_v2vSocket->SendTo(clean, 0, dest);
   VanetPowerModel::RecordCommunication(m_useBsRelay ? "v2v_relay_upload" : "v2v_broadcast",
                                        "vehicle",
                                        m_useBsRelay ? "bs_relay" : "vehicle",
@@ -666,6 +690,44 @@ VehicleApp::MarkInfected()
     pos = mobility->GetPosition();
   }
   VanetStats::MarkInfected(m_vehicleId, pos);
+}
+
+bool
+VehicleApp::MarkMessageSeen(uint64_t messageKey, uint64_t nowUs)
+{
+  if (++m_seenPruneCounter >= 1024 || m_seenMessages.size() > kMaxSeenMessages)
+  {
+    PruneSeenMessages(nowUs);
+  }
+
+  auto [it, inserted] = m_seenMessages.emplace(messageKey, nowUs);
+  if (!inserted)
+  {
+    it->second = nowUs;
+  }
+  return inserted;
+}
+
+void
+VehicleApp::PruneSeenMessages(uint64_t nowUs)
+{
+  m_seenPruneCounter = 0;
+  for (auto it = m_seenMessages.begin(); it != m_seenMessages.end();)
+  {
+    if (nowUs >= it->second && (nowUs - it->second) > kSeenRetentionUs)
+    {
+      it = m_seenMessages.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+
+  while (m_seenMessages.size() > kMaxSeenMessages / 2)
+  {
+    m_seenMessages.erase(m_seenMessages.begin());
+  }
 }
 
 } // namespace ns3

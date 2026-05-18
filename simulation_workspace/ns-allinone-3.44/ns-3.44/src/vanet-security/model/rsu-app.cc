@@ -121,7 +121,12 @@ RsuApp::HandleVehicleRead(Ptr<Socket> socket)
   while (packet && packet->GetSize() > 0)
   {
     VanetMessageHeader header;
-    packet->RemoveHeader(header);
+    if (!TryRemoveVanetMessageHeader(packet, header) ||
+        header.GetPayloadSize() != packet->GetSize())
+    {
+      packet = socket->RecvFrom(from);
+      continue;
+    }
     if (header.GetType() == VanetMessageType::REGISTER_REQ)
     {
       uint32_t vehicleId = header.GetSenderId();

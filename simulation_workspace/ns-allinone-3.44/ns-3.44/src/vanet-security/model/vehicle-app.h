@@ -12,7 +12,7 @@
 #endif
 
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 namespace ns3 {
@@ -37,6 +37,8 @@ private:
   void SendV2vMessage();
   void Rebroadcast(Ptr<Packet> packet);
   void MarkInfected();
+  bool MarkMessageSeen(uint64_t messageKey, uint64_t nowUs);
+  void PruneSeenMessages(uint64_t nowUs);
 
   Ptr<Socket> m_rsuSocket;
   Ptr<Socket> m_v2vSocket;
@@ -81,7 +83,8 @@ private:
   PbcCrypto m_pbc;
 #endif
 
-  std::unordered_set<uint64_t> m_seenMessages;
+  std::unordered_map<uint64_t, uint64_t> m_seenMessages;
+  uint32_t m_seenPruneCounter{0};
 };
 
 } // namespace ns3

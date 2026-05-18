@@ -11,6 +11,9 @@ FL_ROUNDS="${FL_ROUNDS:-20}"
 FL_PARTICIPANTS="${FL_PARTICIPANTS:-$TARGET_VEHICLES}"
 FL_MODEL_DIM="${FL_MODEL_DIM:-64}"
 FL_ROUND_INTERVAL="${FL_ROUND_INTERVAL:-1.0}"
+MSG_INTERVAL="${MSG_INTERVAL:-1.0}"
+RELAY_AGGREGATION_WINDOW_MS="${RELAY_AGGREGATION_WINDOW_MS:-50}"
+RELAY_MAX_BATCH_SIZE="${RELAY_MAX_BATCH_SIZE:-32}"
 BASE_TRACE_PATH="${BASE_TRACE_PATH:-mobility_trace.tcl}"
 TRACE_PATH="${TRACE_PATH:-mobility_trace_${TARGET_VEHICLES}.tcl}"
 NS3_CONFIGURE_ARGS="${NS3_CONFIGURE_ARGS:---enable-examples --build-profile=optimized}"
@@ -36,7 +39,7 @@ run_case() {
 
   echo
   echo "Running ${case_name} for ${SIM_TIME} simulated seconds..."
-  ./ns3 run "vanet-security-nr --SchedulerType=${SCHEDULER_TYPE} --trace=${TRACE_PATH} --radioProfile=6g_nr_max --securityMode=pbc --simTime=${SIM_TIME} --progressLog=true ${extra_args} --outCsv=${power_csv} --stageCsv=${stage_csv}"
+  ./ns3 run "vanet-security-nr --SchedulerType=${SCHEDULER_TYPE} --trace=${TRACE_PATH} --radioProfile=6g_nr_max --securityMode=pbc --simTime=${SIM_TIME} --msgInterval=${MSG_INTERVAL} --relayAggregationWindowMs=${RELAY_AGGREGATION_WINDOW_MS} --relayMaxBatchSize=${RELAY_MAX_BATCH_SIZE} --progressLog=true ${extra_args} --outCsv=${power_csv} --stageCsv=${stage_csv}"
 
   python3 "$REPO_ROOT/scripts/format_pbc_power_results.py" \
     --power-csv "$power_csv" \
@@ -54,6 +57,8 @@ write_index() {
     printf 'Trace: `%s`\n\n' "$TRACE_PATH"
     printf 'Trace vehicle count: `%s`\n\n' "$vehicle_count"
     printf 'Scheduler type: `%s`\n\n' "$SCHEDULER_TYPE"
+    printf 'Message interval: `%s` seconds\n\n' "$MSG_INTERVAL"
+    printf 'Relay aggregation: `%s` ms window, `%s` max batch size\n\n' "$RELAY_AGGREGATION_WINDOW_MS" "$RELAY_MAX_BATCH_SIZE"
     printf 'Radio profile: `6g_nr_max`\n\n'
     printf 'Security mode: `pbc`\n\n'
     printf 'FL settings: `%s` rounds, `%s` participants, model dimension `%s`, round interval `%s` seconds\n\n' "$FL_ROUNDS" "$FL_PARTICIPANTS" "$FL_MODEL_DIM" "$FL_ROUND_INTERVAL"

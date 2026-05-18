@@ -3,6 +3,8 @@
 
 #include "ns3/header.h"
 #include "ns3/nstime.h"
+#include "ns3/packet.h"
+#include "ns3/ptr.h"
 #include "ns3/simple-ref-count.h"
 
 #include <cstdint>
@@ -138,6 +140,12 @@ void WriteUint64(std::vector<uint8_t>& buffer, uint64_t value);
 bool ReadUint64(const std::vector<uint8_t>& buffer, size_t& offset, uint64_t& value);
 void WriteBytes(std::vector<uint8_t>& buffer, const std::vector<uint8_t>& data);
 bool ReadBytes(const std::vector<uint8_t>& buffer, size_t& offset, uint16_t length, std::vector<uint8_t>& out);
+bool TryRemoveVanetMessageHeader(Ptr<Packet> packet, VanetMessageHeader& header);
+bool TryRemoveVanetAuthHeader(Ptr<Packet> packet, VanetAuthHeader& auth);
+bool TryRemoveVanetPbcAuthHeader(Ptr<Packet> packet, VanetPbcAuthHeader& auth);
+bool CopyPacketBytes(Ptr<Packet> packet, std::vector<uint8_t>& out);
+void StripPacketTags(Ptr<Packet> packet);
+uint64_t MakeVanetMessageKey(uint32_t senderId, uint32_t messageId);
 // TCP stream helper: extract one framed VanetMessage (header + payload) if available.
 bool TryExtractMessage(std::vector<uint8_t>& buffer,
                        VanetMessageHeader& header,

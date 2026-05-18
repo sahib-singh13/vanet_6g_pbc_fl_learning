@@ -13,7 +13,6 @@
 
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace ns3 {
@@ -55,6 +54,8 @@ private:
   void HandleRead(Ptr<Socket> socket);
   void ForwardPacket(Ptr<Packet> packet, Ipv4Address srcAddr);
   void FlushBatch(const std::string& batchKey);
+  bool MarkMessageSeen(uint64_t messageKey, uint64_t nowUs);
+  void PruneSeenMessages(uint64_t nowUs);
 
   Ptr<Socket> m_socket;
   uint16_t m_port{9200};
@@ -66,7 +67,8 @@ private:
   uint64_t m_pidValidityUs{30000000};
   std::vector<uint8_t> m_ppubBytes;
   std::unordered_map<std::string, BatchState> m_batches;
-  std::unordered_set<uint64_t> m_seenMessages;
+  std::unordered_map<uint64_t, uint64_t> m_seenMessages;
+  uint32_t m_seenPruneCounter{0};
 
 #ifdef VANET_SECURITY_USE_PBC
   PbcCrypto m_pbc;

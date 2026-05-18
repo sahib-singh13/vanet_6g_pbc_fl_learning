@@ -18,6 +18,7 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ns3 {
@@ -119,6 +120,7 @@ private:
     uint32_t round{0};
     std::vector<double> globalModel;
     std::vector<UpdateEntry> updates;
+    std::unordered_set<uint32_t> seenVehicles;
     uint32_t rejected{0};
   };
 
@@ -196,6 +198,7 @@ private:
   std::string m_securityMode{"pbc"};
   std::vector<double> m_globalModel;
   std::unordered_map<uint32_t, std::vector<RsuAggregate>> m_roundAggregates;
+  std::unordered_map<uint32_t, std::unordered_set<uint32_t>> m_seenRsuAggregates;
   std::ofstream m_csv;
 };
 

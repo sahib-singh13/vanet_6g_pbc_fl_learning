@@ -16,6 +16,13 @@ namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE("BsRelayApp");
 
+namespace {
+
+constexpr uint64_t kSeenRetentionUs = 120000000;
+constexpr size_t kMaxSeenMessages = 200000;
+
+} // namespace
+
 BsRelayApp::BsRelayApp() = default;
 BsRelayApp::~BsRelayApp() = default;
 
@@ -164,27 +171,26 @@ BsRelayApp::HandleRead(Ptr<Socket> socket)
 #ifdef VANET_SECURITY_USE_PBC
     Ptr<Packet> inspect = packet->Copy();
     VanetPbcAuthHeader auth;
-    inspect->RemoveHeader(auth);
+    if (!TryRemoveVanetPbcAuthHeader(inspect, auth))
+    {
+      VanetStats::RecordVerificationFailure();
+      packet = socket->RecvFrom(from);
+      continue;
+    }
 
     VanetMessageHeader header;
-    inspect->RemoveHeader(header);
-    if (header.GetType() != VanetMessageType::V2V_PBC_DATA)
+    if (!TryRemoveVanetMessageHeader(inspect, header) ||
+        header.GetType() != VanetMessageType::V2V_PBC_DATA ||
+        header.GetPayloadSize() != inspect->GetSize())
     {
-      ForwardPacket(packet, srcAddr);
+      VanetStats::RecordVerificationFailure();
       packet = socket->RecvFrom(from);
       continue;
     }
-    const uint64_t msgKey =
-        (static_cast<uint64_t>(header.GetSenderId()) << 32) | header.GetMessageId();
-    if (m_seenMessages.find(msgKey) != m_seenMessages.end())
-    {
-      packet = socket->RecvFrom(from);
-      continue;
-    }
-    m_seenMessages.insert(msgKey);
+    const uint64_t msgKey = MakeVanetMessageKey(header.GetSenderId(), header.GetMessageId());
+    const uint64_t nowUs = static_cast<uint64_t>(Simulator::Now().GetMicroSeconds());
 
     const size_t g1Len = m_pbc.GetG1BytesLength();
-    const uint64_t nowUs = static_cast<uint64_t>(Simulator::Now().GetMicroSeconds());
     if (auth.GetPid1().empty() || auth.GetPid2().size() != 4 || auth.GetQi().size() != g1Len ||
         auth.GetWi().size() != g1Len || auth.GetPsi().size() != g1Len ||
         auth.GetTimestampUs() > nowUs || (nowUs - auth.GetTimestampUs()) > m_pidValidityUs)
@@ -194,16 +200,24 @@ BsRelayApp::HandleRead(Ptr<Socket> socket)
       continue;
     }
 
-    std::vector<uint8_t> messageBytes(inspect->GetSize());
-    if (!messageBytes.empty())
+    std::vector<uint8_t> messageBytes;
+    if (!CopyPacketBytes(inspect, messageBytes))
     {
-      inspect->CopyData(messageBytes.data(), messageBytes.size());
+      VanetStats::RecordVerificationFailure();
+      packet = socket->RecvFrom(from);
+      continue;
     }
 
     std::vector<uint8_t> pidBytes;
     if (!m_pbc.EncodePid(auth.GetPid1(), auth.GetPid2(), auth.GetTimestampUs(), pidBytes))
     {
       VanetStats::RecordVerificationFailure();
+      packet = socket->RecvFrom(from);
+      continue;
+    }
+
+    if (!MarkMessageSeen(msgKey, nowUs))
+    {
       packet = socket->RecvFrom(from);
       continue;
     }
@@ -221,8 +235,7 @@ BsRelayApp::HandleRead(Ptr<Socket> socket)
 
     BatchEntry entry;
     entry.packet = packet->Copy();
-    entry.packet->RemoveAllPacketTags();
-    entry.packet->RemoveAllByteTags();
+    StripPacketTags(entry.packet);
     entry.srcAddr = srcAddr;
     entry.stateBytes = auth.GetState();
     entry.pidBytes = pidBytes;
@@ -260,8 +273,7 @@ BsRelayApp::ForwardPacket(Ptr<Packet> packet, Ipv4Address srcAddr)
       continue;
     }
     Ptr<Packet> copy = packet->Copy();
-    copy->RemoveAllPacketTags();
-    copy->RemoveAllByteTags();
+    StripPacketTags(copy);
     const uint64_t bytes = copy->GetSize();
     m_socket->SendTo(copy, 0, InetSocketAddress(dst, m_port));
     VanetPowerModel::RecordCommunication("v2v_relay_forward", "bs_relay", "vehicle", bytes);
@@ -332,6 +344,44 @@ BsRelayApp::FlushBatch(const std::string& batchKey)
   for (const auto& entry : batch.entries)
   {
     ForwardPacket(entry.packet, entry.srcAddr);
+  }
+}
+
+bool
+BsRelayApp::MarkMessageSeen(uint64_t messageKey, uint64_t nowUs)
+{
+  if (++m_seenPruneCounter >= 1024 || m_seenMessages.size() > kMaxSeenMessages)
+  {
+    PruneSeenMessages(nowUs);
+  }
+
+  auto [it, inserted] = m_seenMessages.emplace(messageKey, nowUs);
+  if (!inserted)
+  {
+    it->second = nowUs;
+  }
+  return inserted;
+}
+
+void
+BsRelayApp::PruneSeenMessages(uint64_t nowUs)
+{
+  m_seenPruneCounter = 0;
+  for (auto it = m_seenMessages.begin(); it != m_seenMessages.end();)
+  {
+    if (nowUs >= it->second && (nowUs - it->second) > kSeenRetentionUs)
+    {
+      it = m_seenMessages.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+
+  while (m_seenMessages.size() > kMaxSeenMessages / 2)
+  {
+    m_seenMessages.erase(m_seenMessages.begin());
   }
 }
 

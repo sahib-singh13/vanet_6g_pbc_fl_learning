@@ -8,6 +8,35 @@ NS_LOG_COMPONENT_DEFINE("VanetMessage");
 
 namespace {
 
+constexpr uint32_t kVanetMessageHeaderSize = 1 + 4 + 4 + 4 + 8 + 4;
+constexpr uint32_t kMaxPayloadSize = 16 * 1024 * 1024;
+
+bool
+IsKnownMessageType(VanetMessageType type)
+{
+  switch (type)
+  {
+  case VanetMessageType::REGISTER_REQ:
+  case VanetMessageType::REGISTER_RESP:
+  case VanetMessageType::KEY_REQ:
+  case VanetMessageType::KEY_RESP:
+  case VanetMessageType::CERT_REQ:
+  case VanetMessageType::CERT_RESP:
+  case VanetMessageType::V2V_DATA:
+  case VanetMessageType::V2V_PBC_DATA:
+  case VanetMessageType::V2I_PING:
+  case VanetMessageType::V2I_PONG:
+  case VanetMessageType::FL_ROUND_START:
+  case VanetMessageType::FL_MODEL_DOWNLOAD:
+  case VanetMessageType::FL_UPDATE_UPLOAD:
+  case VanetMessageType::FL_RSU_AGGREGATE:
+  case VanetMessageType::FL_GLOBAL_MODEL:
+  case VanetMessageType::FL_ROUND_DONE:
+    return true;
+  }
+  return false;
+}
+
 bool
 ReadNtohU16Safe(Buffer::Iterator& start, uint16_t& value)
 {
@@ -611,7 +640,7 @@ TryExtractMessage(std::vector<uint8_t>& buffer,
                   VanetMessageHeader& header,
                   std::vector<uint8_t>& payload)
 {
-  constexpr size_t kHeaderSize = 1 + 4 + 4 + 4 + 8 + 4;
+  constexpr size_t kHeaderSize = kVanetMessageHeaderSize;
   if (buffer.size() < kHeaderSize)
   {
     return false;
@@ -633,12 +662,19 @@ TryExtractMessage(std::vector<uint8_t>& buffer,
     return false;
   }
 
+  VanetMessageType messageType = static_cast<VanetMessageType>(type);
+  if (!IsKnownMessageType(messageType) || payloadSize > kMaxPayloadSize)
+  {
+    buffer.erase(buffer.begin());
+    return false;
+  }
+
   if (buffer.size() < kHeaderSize + payloadSize)
   {
     return false;
   }
 
-  header.SetType(static_cast<VanetMessageType>(type));
+  header.SetType(messageType);
   header.SetSenderId(senderId);
   header.SetTargetId(targetId);
   header.SetMessageId(messageId);
@@ -649,6 +685,87 @@ TryExtractMessage(std::vector<uint8_t>& buffer,
                  buffer.begin() + kHeaderSize + payloadSize);
   buffer.erase(buffer.begin(), buffer.begin() + kHeaderSize + payloadSize);
   return true;
+}
+
+bool
+TryRemoveVanetMessageHeader(Ptr<Packet> packet, VanetMessageHeader& header)
+{
+  if (!packet || packet->GetSize() < kVanetMessageHeaderSize)
+  {
+    return false;
+  }
+  uint32_t removed = packet->RemoveHeader(header);
+  if (removed != kVanetMessageHeaderSize || !IsKnownMessageType(header.GetType()) ||
+      header.GetPayloadSize() > packet->GetSize() || header.GetPayloadSize() > kMaxPayloadSize)
+  {
+    return false;
+  }
+  return true;
+}
+
+bool
+TryRemoveVanetAuthHeader(Ptr<Packet> packet, VanetAuthHeader& auth)
+{
+  if (!packet || packet->GetSize() < 6)
+  {
+    return false;
+  }
+  uint32_t before = packet->GetSize();
+  uint32_t removed = packet->RemoveHeader(auth);
+  if (removed == 0 || removed > before || auth.GetSignature().empty())
+  {
+    return false;
+  }
+  return true;
+}
+
+bool
+TryRemoveVanetPbcAuthHeader(Ptr<Packet> packet, VanetPbcAuthHeader& auth)
+{
+  if (!packet || packet->GetSize() < 20)
+  {
+    return false;
+  }
+  uint32_t before = packet->GetSize();
+  uint32_t removed = packet->RemoveHeader(auth);
+  if (removed == 0 || removed > before || auth.GetPid1().empty() || auth.GetPid2().empty() ||
+      auth.GetQi().empty() || auth.GetWi().empty() || auth.GetPsi().empty())
+  {
+    return false;
+  }
+  return true;
+}
+
+bool
+CopyPacketBytes(Ptr<Packet> packet, std::vector<uint8_t>& out)
+{
+  if (!packet)
+  {
+    out.clear();
+    return false;
+  }
+  out.assign(packet->GetSize(), 0);
+  if (!out.empty())
+  {
+    packet->CopyData(out.data(), out.size());
+  }
+  return true;
+}
+
+void
+StripPacketTags(Ptr<Packet> packet)
+{
+  if (packet)
+  {
+    packet->RemoveAllPacketTags();
+    packet->RemoveAllByteTags();
+  }
+}
+
+uint64_t
+MakeVanetMessageKey(uint32_t senderId, uint32_t messageId)
+{
+  return (static_cast<uint64_t>(senderId) << 32) | messageId;
 }
 
 } // namespace ns3

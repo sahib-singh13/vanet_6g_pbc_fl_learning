@@ -247,6 +247,8 @@ int main(int argc, char* argv[])
   std::string tracePath = "../../integration_test/mobility_trace.tcl";
   double simTime = 150.0;
   double msgInterval = 1.0;
+  uint64_t relayAggregationWindowMs = 50;
+  uint32_t relayMaxBatchSize = 32;
   bool verifySignatures = true;
   uint32_t rsuCount = 2;
   double nrFreq = 60e9;
@@ -289,6 +291,10 @@ int main(int argc, char* argv[])
   cmd.AddValue("trace", "Path to SUMO ns-2 mobility trace", tracePath);
   cmd.AddValue("simTime", "Simulation time (s)", simTime);
   cmd.AddValue("msgInterval", "Source message interval (s)", msgInterval);
+  cmd.AddValue("relayAggregationWindowMs",
+               "BS relay PBC aggregation window in milliseconds",
+               relayAggregationWindowMs);
+  cmd.AddValue("relayMaxBatchSize", "BS relay maximum PBC batch size", relayMaxBatchSize);
   cmd.AddValue("verifySignatures", "Enable ECDSA verification", verifySignatures);
   cmd.AddValue("rsuCount", "Number of RSU/gNB nodes", rsuCount);
   cmd.AddValue("nrFreq", "NR carrier frequency (Hz)", nrFreq);
@@ -717,6 +723,8 @@ sign0 -1
     relayApp->SetAttribute("EnablePbc", BooleanValue(enablePbc));
     relayApp->SetAttribute("PairingParams", StringValue(pbcParams));
     relayApp->SetAttribute("PidValidityUs", UintegerValue(pidValidityUs));
+    relayApp->SetAttribute("AggregationWindowMs", UintegerValue(relayAggregationWindowMs));
+    relayApp->SetAttribute("MaxBatchSize", UintegerValue(relayMaxBatchSize));
     bsNode.Get(0)->AddApplication(relayApp);
     relayApp->SetStartTime(Seconds(0.4));
     if (enablePbc)
