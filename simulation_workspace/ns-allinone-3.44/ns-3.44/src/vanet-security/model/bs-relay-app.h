@@ -13,6 +13,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ns3 {
@@ -65,6 +66,7 @@ private:
   uint64_t m_pidValidityUs{30000000};
   std::vector<uint8_t> m_ppubBytes;
   std::unordered_map<std::string, BatchState> m_batches;
+  std::unordered_set<uint64_t> m_seenMessages;
 
 #ifdef VANET_SECURITY_USE_PBC
   PbcCrypto m_pbc;

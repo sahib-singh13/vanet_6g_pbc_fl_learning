@@ -174,6 +174,14 @@ BsRelayApp::HandleRead(Ptr<Socket> socket)
       packet = socket->RecvFrom(from);
       continue;
     }
+    const uint64_t msgKey =
+        (static_cast<uint64_t>(header.GetSenderId()) << 32) | header.GetMessageId();
+    if (m_seenMessages.find(msgKey) != m_seenMessages.end())
+    {
+      packet = socket->RecvFrom(from);
+      continue;
+    }
+    m_seenMessages.insert(msgKey);
 
     const size_t g1Len = m_pbc.GetG1BytesLength();
     const uint64_t nowUs = static_cast<uint64_t>(Simulator::Now().GetMicroSeconds());
@@ -213,6 +221,8 @@ BsRelayApp::HandleRead(Ptr<Socket> socket)
 
     BatchEntry entry;
     entry.packet = packet->Copy();
+    entry.packet->RemoveAllPacketTags();
+    entry.packet->RemoveAllByteTags();
     entry.srcAddr = srcAddr;
     entry.stateBytes = auth.GetState();
     entry.pidBytes = pidBytes;
