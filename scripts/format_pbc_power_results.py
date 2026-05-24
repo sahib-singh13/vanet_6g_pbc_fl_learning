@@ -25,13 +25,21 @@ SECURITY_MESSAGE = {
     "pbc_verify_aggregate",
 }
 
+FL_COMPUTE = {
+    "fl_local_train",
+    "fl_mask_generate",
+    "fl_edge_aggregate",
+    "fl_global_aggregate",
+}
+
 SECTION_ORDER = {
     "total": 0,
     "security_setup": 1,
     "security_message": 2,
-    "communication_tx": 3,
-    "communication_rx": 4,
-    "other": 5,
+    "fl_compute": 3,
+    "communication_tx": 4,
+    "communication_rx": 5,
+    "other": 6,
 }
 
 
@@ -58,6 +66,8 @@ def section_for(stage: str) -> str:
         return "security_setup"
     if stage in SECURITY_MESSAGE:
         return "security_message"
+    if stage in FL_COMPUTE:
+        return "fl_compute"
     return "other"
 
 
@@ -125,7 +135,22 @@ def add_percentages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     return rows
 
 
-def build_structured_rows(raw_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def add_stage_power(rows: list[dict[str, object]], sim_time_s: float) -> list[dict[str, object]]:
+    for row in rows:
+        row["avg_stage_power_w"] = (
+            float(row["total_energy_j"]) / sim_time_s if sim_time_s > 0.0 else 0.0
+        )
+    return rows
+
+
+def infer_sim_time_s(power_row: dict[str, str], explicit_sim_time_s: float) -> float:
+    if explicit_sim_time_s > 0.0:
+        return explicit_sim_time_s
+    final_time = to_float(power_row.get("time", "0"))
+    return final_time + 1.0 if final_time > 0.0 else 0.0
+
+
+def build_structured_rows(raw_rows: list[dict[str, object]], sim_time_s: float) -> list[dict[str, object]]:
     security_rows = [row for row in raw_rows if not str(row["stage"]).startswith("communication_")]
     tx_rows = [row for row in raw_rows if row["stage"] == "communication_tx"]
     rx_rows = [row for row in raw_rows if row["stage"] == "communication_rx"]
@@ -148,7 +173,7 @@ def build_structured_rows(raw_rows: list[dict[str, object]]) -> list[dict[str, o
             str(row["role"]),
         ),
     )
-    return add_percentages(totals + detailed)
+    return add_stage_power(add_percentages(totals + detailed), sim_time_s)
 
 
 def write_structured_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -162,6 +187,7 @@ def write_structured_csv(path: Path, rows: list[dict[str, object]]) -> None:
         "avg_latency_ms",
         "total_latency_ms",
         "total_energy_j",
+        "avg_stage_power_w",
         "avg_energy_mj_per_op",
         "energy_percent",
         "latency_percent",
@@ -175,6 +201,7 @@ def write_structured_csv(path: Path, rows: list[dict[str, object]]) -> None:
                 "avg_latency_ms",
                 "total_latency_ms",
                 "total_energy_j",
+                "avg_stage_power_w",
                 "avg_energy_mj_per_op",
                 "energy_percent",
                 "latency_percent",
@@ -200,7 +227,9 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
     network = str(rows[0]["network_label"]) if rows else ""
     mode = str(rows[0]["security_mode"]) if rows else ""
     totals = {str(row["stage"]): row for row in rows if row["section"] == "total"}
-    security_rows = [row for row in rows if row["section"] in {"security_setup", "security_message"}]
+    security_rows = [
+        row for row in rows if row["section"] in {"security_setup", "security_message", "fl_compute"}
+    ]
     communication_rows = [row for row in rows if row["section"] in {"communication_tx", "communication_rx"}]
     detailed_rows = [row for row in rows if row["section"] != "total"]
 
@@ -217,6 +246,8 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                 ["Total stage latency (ms)", fmt(totals["overall_total"]["total_latency_ms"], 3)],
                 ["Security latency total (ms)", fmt(totals["security_total"]["total_latency_ms"], 3)],
                 ["Communication latency total (ms)", fmt(totals["communication_total"]["total_latency_ms"], 3)],
+                ["Avg security stage power (W)", fmt(totals["security_total"]["avg_stage_power_w"], 6)],
+                ["Avg communication stage power (W)", fmt(totals["communication_total"]["avg_stage_power_w"], 6)],
             ],
         ),
         "",
@@ -320,6 +351,7 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                     "Total Latency (ms)",
                     "Latency %",
                     "Energy (J)",
+                    "Avg Stage Power (W)",
                     "Avg Energy (mJ/op)",
                     "Energy %",
                 ],
@@ -333,6 +365,7 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                         fmt(row["total_latency_ms"], 3),
                         fmt(row["latency_percent"], 2),
                         fmt(row["total_energy_j"], 6),
+                        fmt(row["avg_stage_power_w"], 6),
                         fmt(row["avg_energy_mj_per_op"], 6),
                         fmt(row["energy_percent"], 2),
                     ]
@@ -350,6 +383,7 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                     "Total Airtime (ms)",
                     "Latency %",
                     "Energy (J)",
+                    "Avg Stage Power (W)",
                     "Avg Energy (mJ/op)",
                     "Energy %",
                 ],
@@ -362,6 +396,7 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
                         fmt(row["total_latency_ms"], 3),
                         fmt(row["latency_percent"], 2),
                         fmt(row["total_energy_j"], 6),
+                        fmt(row["avg_stage_power_w"], 6),
                         fmt(row["avg_energy_mj_per_op"], 6),
                         fmt(row["energy_percent"], 2),
                     ]
@@ -380,13 +415,23 @@ def write_markdown_report(path: Path, rows: list[dict[str, object]], power_row: 
     )[:10]
     lines.append(
         md_table(
-            ["Rank", "Stage", "Role", "Energy (J)", "Energy %", "Avg Latency (ms)", "Count"],
+            [
+                "Rank",
+                "Stage",
+                "Role",
+                "Energy (J)",
+                "Avg Stage Power (W)",
+                "Energy %",
+                "Avg Latency (ms)",
+                "Count",
+            ],
             [
                 [
                     str(index),
                     str(row["stage"]),
                     str(row["role"]),
                     fmt(row["total_energy_j"], 6),
+                    fmt(row["avg_stage_power_w"], 6),
                     fmt(row["energy_percent"], 2),
                     fmt(row["avg_latency_ms"], 3),
                     str(row["count"]),
@@ -435,11 +480,18 @@ def main() -> None:
     parser.add_argument("--stage-csv", required=True, type=Path)
     parser.add_argument("--power-csv", type=Path)
     parser.add_argument("--out-prefix", required=True, type=Path)
+    parser.add_argument(
+        "--sim-time",
+        type=float,
+        default=0.0,
+        help="Simulation duration in seconds for stage average power; inferred from power CSV if omitted.",
+    )
     args = parser.parse_args()
 
     raw_rows = read_stage_rows(args.stage_csv)
-    structured_rows = build_structured_rows(raw_rows)
     power_row = read_last_power_row(args.power_csv)
+    sim_time_s = infer_sim_time_s(power_row, args.sim_time)
+    structured_rows = build_structured_rows(raw_rows, sim_time_s)
 
     structured_csv = args.out_prefix.with_name(args.out_prefix.name + "_structured.csv")
     report_md = args.out_prefix.with_name(args.out_prefix.name + "_report.md")
