@@ -507,6 +507,16 @@ FlRsuAggregatorApp::GetTypeId()
                                         UintegerValue(0),
                                         MakeUintegerAccessor(&FlRsuAggregatorApp::m_expectedUpdates),
                                         MakeUintegerChecker<uint32_t>())
+                          .AddAttribute("FlushTimeout",
+                                        "Maximum wait for expected FL updates before partial aggregation is allowed. Zero keeps strict all-update aggregation.",
+                                        TimeValue(Seconds(0.0)),
+                                        MakeTimeAccessor(&FlRsuAggregatorApp::m_flushTimeout),
+                                        MakeTimeChecker())
+                          .AddAttribute("MinFlushFraction",
+                                        "Minimum fraction of expected updates required for timeout-based partial aggregation.",
+                                        DoubleValue(1.0),
+                                        MakeDoubleAccessor(&FlRsuAggregatorApp::m_minFlushFraction),
+                                        MakeDoubleChecker<double>(0.0, 1.0))
                           .AddAttribute("ModelDim",
                                         "Number of model-vector parameters.",
                                         UintegerValue(64),
@@ -592,6 +602,13 @@ FlRsuAggregatorApp::StopApplication()
     m_socket->Close();
     m_socket = nullptr;
   }
+  for (auto& item : m_rounds)
+  {
+    if (item.second.flushEvent.IsRunning())
+    {
+      item.second.flushEvent.Cancel();
+    }
+  }
   m_rounds.clear();
 }
 
@@ -653,11 +670,16 @@ FlRsuAggregatorApp::HandleModelDownload(const VanetMessageHeader& header,
   }
 
   RoundState& state = m_rounds[round];
+  if (state.flushEvent.IsRunning())
+  {
+    state.flushEvent.Cancel();
+  }
   state.round = round;
   state.globalModel = globalModel;
   state.updates.clear();
   state.seenVehicles.clear();
   state.rejected = 0;
+  state.flushDeadlineExpired = false;
 
   for (const Ipv4Address& vehicle : m_vehicleAddresses)
   {
@@ -673,6 +695,12 @@ FlRsuAggregatorApp::HandleModelDownload(const VanetMessageHeader& header,
     const uint64_t bytes = packet->GetSize();
     m_socket->SendTo(packet, 0, InetSocketAddress(vehicle, m_vehiclePort));
     VanetPowerModel::RecordCommunication("fl_model_download", "rsu", "vehicle", bytes);
+  }
+
+  if (!m_flushTimeout.IsZero())
+  {
+    state.flushEvent =
+        Simulator::Schedule(m_flushTimeout, &FlRsuAggregatorApp::FlushRoundOnTimeout, this, round);
   }
 }
 
@@ -797,7 +825,7 @@ FlRsuAggregatorApp::HandleVehicleUpdate(Ptr<Packet> packet, const Address& from)
 }
 
 void
-FlRsuAggregatorApp::TryFlushRound(uint32_t round)
+FlRsuAggregatorApp::TryFlushRound(uint32_t round, bool deadlineExpired)
 {
   auto it = m_rounds.find(round);
   if (it == m_rounds.end())
@@ -805,13 +833,25 @@ FlRsuAggregatorApp::TryFlushRound(uint32_t round)
     return;
   }
   RoundState& state = it->second;
-  if (m_expectedUpdates > 0 && state.updates.size() < m_expectedUpdates)
+  if (deadlineExpired)
   {
-    return;
+    state.flushDeadlineExpired = true;
   }
   if (state.updates.empty())
   {
     return;
+  }
+  const uint32_t received = static_cast<uint32_t>(state.updates.size());
+  const bool hasAllExpected = (m_expectedUpdates == 0 || received >= m_expectedUpdates);
+  const bool deadlineAllowsPartial =
+      state.flushDeadlineExpired && received >= GetMinFlushUpdates();
+  if (!hasAllExpected && !deadlineAllowsPartial)
+  {
+    return;
+  }
+  if (state.flushEvent.IsRunning())
+  {
+    state.flushEvent.Cancel();
   }
 
   uint32_t verified = static_cast<uint32_t>(state.updates.size());
@@ -876,6 +916,25 @@ FlRsuAggregatorApp::TryFlushRound(uint32_t round)
 
   SendAggregate(round, aggregate, verified, state.rejected, totalDataset);
   m_rounds.erase(it);
+}
+
+void
+FlRsuAggregatorApp::FlushRoundOnTimeout(uint32_t round)
+{
+  TryFlushRound(round, true);
+}
+
+uint32_t
+FlRsuAggregatorApp::GetMinFlushUpdates() const
+{
+  if (m_expectedUpdates == 0)
+  {
+    return 1;
+  }
+  const double fraction = std::max(0.0, std::min(1.0, m_minFlushFraction));
+  const uint32_t minUpdates =
+      static_cast<uint32_t>(std::ceil(static_cast<double>(m_expectedUpdates) * fraction));
+  return std::max(1u, std::min(m_expectedUpdates, minUpdates));
 }
 
 void

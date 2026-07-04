@@ -252,6 +252,8 @@ int main(int argc, char* argv[])
   uint32_t flLocalEpochs = 1;
   double flLearningRate = 0.01;
   bool flMasking = true;
+  double flRsuFlushTimeout = 0.0;
+  double flRsuMinFlushFraction = 1.0;
   std::string flCsv = "results/fl/lte_fl.csv";
   std::string flStageCsv = "";
   std::string flSecurityMode = "";
@@ -285,6 +287,12 @@ int main(int argc, char* argv[])
   cmd.AddValue("flLocalEpochs", "Synthetic local epochs per FL round", flLocalEpochs);
   cmd.AddValue("flLearningRate", "Synthetic FL learning rate", flLearningRate);
   cmd.AddValue("flMasking", "Enable FL deterministic pairwise masks", flMasking);
+  cmd.AddValue("flRsuFlushTimeout",
+               "Seconds an FL RSU waits before allowing threshold-based partial aggregation",
+               flRsuFlushTimeout);
+  cmd.AddValue("flRsuMinFlushFraction",
+               "Minimum fraction of expected FL vehicle updates required after timeout",
+               flRsuMinFlushFraction);
   cmd.AddValue("flCsv", "FL round metrics CSV path", flCsv);
   cmd.AddValue("flStageCsv", "Optional FL-focused stage summary CSV path", flStageCsv);
   cmd.AddValue("flSecurityMode", "FL security mode override: pbc or ecc; default follows securityMode", flSecurityMode);
@@ -667,6 +675,8 @@ sign0 -1
       flRsu->SetAttribute("BsAddress", Ipv4AddressValue(bsRsuIfs.GetAddress(0)));
       flRsu->SetAttribute("RsuId", UintegerValue(r));
       flRsu->SetAttribute("ExpectedUpdates", UintegerValue(groupIds[r].size()));
+      flRsu->SetAttribute("FlushTimeout", TimeValue(Seconds(flRsuFlushTimeout)));
+      flRsu->SetAttribute("MinFlushFraction", DoubleValue(flRsuMinFlushFraction));
       flRsu->SetAttribute("ModelDim", UintegerValue(flModelDim));
       flRsu->SetAttribute("EnablePbc", BooleanValue(flEnablePbc));
       flRsu->SetAttribute("SecurityMode", StringValue(flSecurityMode));

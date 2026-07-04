@@ -122,12 +122,16 @@ private:
     std::vector<UpdateEntry> updates;
     std::unordered_set<uint32_t> seenVehicles;
     uint32_t rejected{0};
+    EventId flushEvent;
+    bool flushDeadlineExpired{false};
   };
 
   void HandleRead(Ptr<Socket> socket);
   void HandleModelDownload(const VanetMessageHeader& header, const std::vector<uint8_t>& payload);
   void HandleVehicleUpdate(Ptr<Packet> packet, const Address& from);
-  void TryFlushRound(uint32_t round);
+  void TryFlushRound(uint32_t round, bool deadlineExpired = false);
+  void FlushRoundOnTimeout(uint32_t round);
+  uint32_t GetMinFlushUpdates() const;
   void SendAggregate(uint32_t round, const std::vector<double>& aggregate, uint32_t verified, uint32_t rejected, uint32_t totalDataset);
 
   Ptr<Socket> m_socket;
@@ -139,6 +143,8 @@ private:
   uint32_t m_rsuId{0};
   uint32_t m_expectedUpdates{0};
   uint32_t m_modelDim{64};
+  Time m_flushTimeout{Seconds(0.0)};
+  double m_minFlushFraction{1.0};
   bool m_enablePbc{false};
   std::string m_securityMode{"pbc"};
   std::string m_pairingParams;

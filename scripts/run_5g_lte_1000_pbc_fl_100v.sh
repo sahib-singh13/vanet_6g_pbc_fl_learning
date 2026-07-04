@@ -11,6 +11,8 @@ FL_ROUNDS="${FL_ROUNDS:-500}"
 FL_PARTICIPANTS="${FL_PARTICIPANTS:-$TARGET_VEHICLES}"
 FL_MODEL_DIM="${FL_MODEL_DIM:-64}"
 FL_ROUND_INTERVAL="${FL_ROUND_INTERVAL:-1.0}"
+FL_RSU_FLUSH_TIMEOUT="${FL_RSU_FLUSH_TIMEOUT:-2.0}"
+FL_RSU_MIN_FLUSH_FRACTION="${FL_RSU_MIN_FLUSH_FRACTION:-0.8}"
 MSG_INTERVAL="${MSG_INTERVAL:-1.0}"
 BASE_TRACE_PATH="${BASE_TRACE_PATH:-mobility_trace.tcl}"
 TRACE_PATH="${TRACE_PATH:-mobility_trace_${TARGET_VEHICLES}.tcl}"
@@ -61,6 +63,7 @@ write_index() {
     printf 'Message interval: `%s` seconds\n\n' "$MSG_INTERVAL"
     printf 'Analytical effective rate: `100 Mbps`\n\n'
     printf 'FL settings: `%s` rounds, `%s` participants, model dimension `%s`, round interval `%s` seconds\n\n' "$FL_ROUNDS" "$FL_PARTICIPANTS" "$FL_MODEL_DIM" "$FL_ROUND_INTERVAL"
+    printf 'FL RSU partial aggregation: timeout `%s` seconds, minimum update fraction `%s`\n\n' "$FL_RSU_FLUSH_TIMEOUT" "$FL_RSU_MIN_FLUSH_FRACTION"
     printf 'Stage average power formula: `avg_stage_power_w = total_energy_j / %s`\n\n' "$SIM_TIME"
     printf '## Reports\n\n'
     printf '| Case | Markdown report | Structured CSV | Power CSV | Stage CSV | FL rounds CSV |\n'
@@ -118,7 +121,7 @@ echo "Building VANET LTE security scenario..."
 run_case "5g_lte_pbc" ""
 
 run_case "5g_lte_pbc_fl" \
-  "--enableFl=true --flSecurityMode=pbc --flRounds=${FL_ROUNDS} --flParticipants=${FL_PARTICIPANTS} --flModelDim=${FL_MODEL_DIM} --flRoundInterval=${FL_ROUND_INTERVAL} --flCsv=${RESULT_DIR}/5g_lte_pbc_fl_rounds.csv --flStageCsv=${RESULT_DIR}/5g_lte_pbc_fl_stage_summary.csv"
+  "--enableFl=true --flSecurityMode=pbc --flRounds=${FL_ROUNDS} --flParticipants=${FL_PARTICIPANTS} --flModelDim=${FL_MODEL_DIM} --flRoundInterval=${FL_ROUND_INTERVAL} --flRsuFlushTimeout=${FL_RSU_FLUSH_TIMEOUT} --flRsuMinFlushFraction=${FL_RSU_MIN_FLUSH_FRACTION} --flCsv=${RESULT_DIR}/5g_lte_pbc_fl_rounds.csv --flStageCsv=${RESULT_DIR}/5g_lte_pbc_fl_stage_summary.csv"
 
 python3 "$REPO_ROOT/scripts/format_fl_round_results.py" \
   --fl-csv "$RESULT_DIR/5g_lte_pbc_fl_rounds.csv" \
